@@ -1,0 +1,33 @@
+# Minimal Ambient Swarm Sandbox - Faster build, essential tools only
+#
+# For faster iteration during development
+
+FROM python:3.11-slim
+
+LABEL maintainer="Ambient Swarm"
+LABEL description="Minimal sandbox for quick testing"
+LABEL version="2.0.0"
+
+WORKDIR /repo
+
+# Install only essential tools
+RUN apt-get update && apt-get install -y \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install core Python tools
+RUN pip install --no-cache-dir \
+    pytest>=7.4.0 \
+    ruff>=0.1.0 \
+    mypy>=1.5.0
+
+# Create non-root user
+RUN useradd -m -u 1000 -s /bin/bash ambient && \
+    chown -R ambient:ambient /repo
+
+USER ambient
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+CMD ["/bin/bash"]
