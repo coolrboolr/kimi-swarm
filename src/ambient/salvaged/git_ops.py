@@ -13,9 +13,13 @@ def _run(root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, cwd=str(root), text=True, capture_output=True)
 
 
-def git_reset_hard_clean(root: Path) -> None:
+def git_reset_hard_clean(root: Path, exclude: list[str] | None = None) -> None:
+    """Reset to HEAD and clean untracked files, preserving selected excludes."""
     _run(root, ["git", "reset", "--hard"])
-    _run(root, ["git", "clean", "-fd"])
+    cmd = ["git", "clean", "-fd"]
+    for path in (exclude or [".ambient"]):
+        cmd.extend(["-e", path])
+    _run(root, cmd)
 
 
 def git_status_porcelain(root: Path) -> list[str]:
