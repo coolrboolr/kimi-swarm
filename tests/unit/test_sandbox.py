@@ -164,6 +164,38 @@ class TestSandboxRunner:
 
         assert result["cmd"] == cmd
 
+    def test_allowlist_enforced_rejects_disallowed(self, test_repo):
+        """Test allowlist enforcement rejects commands not matching patterns."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+            allowed_commands=[r"^echo\b"],
+            enforce_allowlist=True,
+        )
+
+        allowed = sandbox.run("echo 'ok'")
+        assert allowed["exit_code"] == 0
+
+        rejected = sandbox.run("ls")
+        assert rejected["exit_code"] == 126
+        assert "rejected" in rejected and rejected["rejected"] is True
+
+    def test_shell_operators_blocked_by_default(self, test_repo):
+        """Test that basic shell chaining is rejected unless explicitly allowed."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+            allowed_commands=[r"^echo\b"],
+            enforce_allowlist=True,
+            allow_shell_operators=False,
+        )
+
+        rejected = sandbox.run("echo ok; echo nope")
+        assert rejected["exit_code"] == 126
+        assert "Shell operator not allowed" in rejected["stderr"]
+
     @pytest.mark.skipif(
         os.getenv("SKIP_DOCKER_TESTS") == "1",
         reason="Docker tests skipped",

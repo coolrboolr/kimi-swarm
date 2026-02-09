@@ -51,7 +51,10 @@ def test_repo(tmp_path):
 @pytest.fixture
 def mock_config():
     """Create mock configuration."""
-    return AmbientConfig()
+    config = AmbientConfig()
+    # Keep integration tests hermetic: no persistent telemetry artifacts.
+    config.telemetry.enabled = False
+    return config
 
 
 @pytest.mark.asyncio
@@ -108,6 +111,21 @@ class TestEndToEndFlow:
             content = (test_repo / "main.py").read_text()
             assert "Hello, World!" in content
 
+            # Verify the change was committed and worktree is clean
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=test_repo,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            # Tooling artifacts may be untracked (e.g., telemetry, patch scratch),
+            # but there should be no tracked modifications after commit.
+            remaining = [
+                ln for ln in status.splitlines() if ln.strip() and not ln.startswith("?? .ambient/") and not ln.startswith("?? .swarmguard/")
+            ]
+            assert remaining == []
+
     async def test_approval_rejection(self, test_repo, mock_config):
         """Test that rejected proposals are not applied."""
         # Create coordinator with auto-reject handler
@@ -155,6 +173,48 @@ class TestEndToEndFlow:
             content = (test_repo / "main.py").read_text()
             assert "Modified" not in content
             assert "Hello" in content  # Original content
+
+    async def test_dirty_worktree_blocks_apply(self, test_repo, mock_config):
+        """Test that uncommitted changes block applying proposals when configured."""
+        approval_handler = AlwaysApproveHandler(mock_config.risk_policy)
+        coordinator = AmbientCoordinator(test_repo, mock_config, approval_handler)
+
+        # Dirty the worktree (tracked modification)
+        (test_repo / "main.py").write_text("def hello():\n    print('DIRTY')\n")
+
+        mock_proposal_json = """[
+  {
+    "agent": "StyleEnforcer",
+    "title": "Test fix",
+    "description": "Test description",
+    "diff": "--- a/main.py\\n+++ b/main.py\\n@@ -1,2 +1,2 @@\\n def hello():\\n-    print('DIRTY')\\n+    print('Hello, World!')\\n",
+    "risk_level": "low",
+    "rationale": "Test rationale",
+    "files_touched": ["main.py"],
+    "estimated_loc_change": 2,
+    "tags": ["test"]
+  }
+]"""
+
+        with patch.object(
+            coordinator.kimi_client,
+            "chat_completion",
+            new_callable=AsyncMock,
+        ) as mock_chat:
+            mock_chat.return_value = {
+                "choices": [{"message": {"content": mock_proposal_json}}]
+            }
+
+            event = AmbientEvent(
+                type="file_change",
+                data={"src_path": str(test_repo / "main.py")},
+                task_spec={"goal": "Test improvement"},
+            )
+
+            result = await coordinator.run_once(event)
+
+            assert len(result.get("applied", [])) == 0
+            assert any(f.get("reason") == "dirty_worktree" for f in result.get("failed", []))
 
     async def test_verification_failure_rollback(self, test_repo, mock_config, monkeypatch):
         """Test that failed verification triggers rollback."""

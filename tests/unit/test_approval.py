@@ -2,13 +2,14 @@
 
 import pytest
 
-from src.ambient.approval import (
+from ambient.approval import (
     ApprovalHandler,
     AlwaysApproveHandler,
     AlwaysRejectHandler,
+    WebhookApprovalHandler,
 )
-from src.ambient.types import Proposal
-from src.ambient.config import RiskPolicyConfig
+from ambient.types import Proposal
+from ambient.config import RiskPolicyConfig
 
 
 @pytest.fixture
@@ -182,8 +183,73 @@ class TestAlwaysRejectHandler:
 
         # All should be rejected
         for proposal in proposals:
-            approved = await handler.request_approval(proposal)
-            assert not approved
+                approved = await handler.request_approval(proposal)
+                assert not approved
+
+
+class TestWebhookApprovalHandler:
+    """Tests for webhook approval handler (synchronous decision)."""
+
+    @pytest.mark.asyncio
+    async def test_webhook_approves(self, sample_proposal, sample_assessment, monkeypatch):
+        class DummyResponse:
+            status_code = 200
+
+            def json(self):
+                return {"approved": True, "reason": "ok"}
+
+        class DummyClient:
+            def __init__(self, timeout):  # noqa: D401
+                self.timeout = timeout
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json, headers=None):  # noqa: ARG002
+                return DummyResponse()
+
+        import ambient.approval as approval_mod
+
+        monkeypatch.setattr(approval_mod.httpx, "AsyncClient", DummyClient)
+
+        handler = WebhookApprovalHandler(
+            RiskPolicyConfig(),
+            webhook_url="https://example.test/approve",
+            headers={"X-Test": "1"},
+            timeout_seconds=5,
+        )
+
+        assert await handler.request_approval(sample_proposal, sample_assessment) is True
+
+    @pytest.mark.asyncio
+    async def test_webhook_fail_closed_on_error(self, sample_proposal, sample_assessment, monkeypatch):
+        class DummyClient:
+            def __init__(self, timeout):  # noqa: D401,ARG002
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json, headers=None):  # noqa: ARG002
+                raise RuntimeError("boom")
+
+        import ambient.approval as approval_mod
+
+        monkeypatch.setattr(approval_mod.httpx, "AsyncClient", DummyClient)
+
+        handler = WebhookApprovalHandler(
+            RiskPolicyConfig(),
+            webhook_url="https://example.test/approve",
+            timeout_seconds=1,
+        )
+
+        assert await handler.request_approval(sample_proposal, sample_assessment) is False
 
 
 class TestApprovalHandlerInheritance:

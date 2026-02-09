@@ -10,6 +10,7 @@ Commands:
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import sys
 from pathlib import Path
@@ -20,7 +21,12 @@ from .config import load_config, AmbientConfig
 from .coordinator import AmbientCoordinator
 from .workspace import Workspace
 from .types import AmbientEvent
-from .approval import ApprovalHandler, AlwaysApproveHandler, AlwaysRejectHandler
+from .approval import (
+    ApprovalHandler,
+    AlwaysApproveHandler,
+    AlwaysRejectHandler,
+    WebhookApprovalHandler,
+)
 
 
 @click.group()
@@ -43,7 +49,20 @@ def cli():
     is_flag=True,
     help="Don't apply any changes (dry run mode)",
 )
-def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool):
+@click.option(
+    "--approval-mode",
+    type=click.Choice(["interactive", "webhook"]),
+    default="interactive",
+    show_default=True,
+    help="Approval mechanism for high-risk changes.",
+)
+def watch(
+    repo_path: str,
+    config: str | None,
+    auto_approve: bool,
+    dry_run: bool,
+    approval_mode: str,
+):
     """Start continuous monitoring of repository.
 
     Watches for file changes and continuously proposes improvements.
@@ -74,8 +93,21 @@ def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool)
         click.echo("Mode: AUTO-APPROVE (all proposals will be applied)")
         approval_handler = AlwaysApproveHandler(ambient_config.risk_policy)
     else:
-        click.echo("Mode: INTERACTIVE (approval required for high-risk changes)")
-        approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
+        if approval_mode == "webhook":
+            if not ambient_config.approval.webhook.url:
+                raise click.ClickException(
+                    "approval_mode=webhook requires approval.webhook.url (or AMBIENT_APPROVAL_WEBHOOK_URL)"
+                )
+            click.echo("Mode: WEBHOOK (approval required for high-risk changes)")
+            approval_handler = WebhookApprovalHandler(
+                ambient_config.risk_policy,
+                ambient_config.approval.webhook.url,
+                headers=ambient_config.approval.webhook.headers,
+                timeout_seconds=ambient_config.approval.webhook.timeout_seconds,
+            )
+        else:
+            click.echo("Mode: INTERACTIVE (approval required for high-risk changes)")
+            approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
 
     click.echo()
     click.echo("Enabled agents:")
@@ -112,6 +144,13 @@ def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool)
     help="Don't apply any changes",
 )
 @click.option(
+    "--approval-mode",
+    type=click.Choice(["interactive", "webhook"]),
+    default="interactive",
+    show_default=True,
+    help="Approval mechanism for high-risk changes.",
+)
+@click.option(
     "--output",
     "-o",
     type=click.Path(),
@@ -122,6 +161,7 @@ def run_once(
     config: str | None,
     auto_approve: bool,
     dry_run: bool,
+    approval_mode: str,
     output: str | None,
 ):
     """Run a single analysis cycle.
@@ -153,8 +193,21 @@ def run_once(
         approval_handler = AlwaysApproveHandler(ambient_config.risk_policy)
         click.echo("Mode: AUTO-APPROVE")
     else:
-        approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
-        click.echo("Mode: INTERACTIVE")
+        if approval_mode == "webhook":
+            if not ambient_config.approval.webhook.url:
+                raise click.ClickException(
+                    "approval_mode=webhook requires approval.webhook.url (or AMBIENT_APPROVAL_WEBHOOK_URL)"
+                )
+            approval_handler = WebhookApprovalHandler(
+                ambient_config.risk_policy,
+                ambient_config.approval.webhook.url,
+                headers=ambient_config.approval.webhook.headers,
+                timeout_seconds=ambient_config.approval.webhook.timeout_seconds,
+            )
+            click.echo("Mode: WEBHOOK")
+        else:
+            approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
+            click.echo("Mode: INTERACTIVE")
 
     click.echo()
 
@@ -236,7 +289,20 @@ def verify(repo_path: str, config: str | None):
     ambient_config.apply_env_overrides()
 
     # Create workspace and run verification
-    workspace = Workspace(repo_path_obj, ambient_config.sandbox.image)
+    workspace = Workspace(
+        repo_path_obj,
+        ambient_config.sandbox.image,
+        sandbox_network=ambient_config.sandbox.network_mode,
+        sandbox_memory=ambient_config.sandbox.resources.memory,
+        sandbox_cpus=ambient_config.sandbox.resources.cpus,
+        sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+        sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
+        sandbox_require_docker=ambient_config.sandbox.require_docker,
+        sandbox_stub=ambient_config.sandbox.stub_mode,
+        verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+    )
 
     click.echo("Running verification checks...")
     click.echo()
@@ -298,7 +364,20 @@ def debug_context(repo_path: str, config: str | None, format: str):
     ambient_config.apply_env_overrides()
 
     # Build context
-    workspace = Workspace(repo_path_obj, ambient_config.sandbox.image)
+    workspace = Workspace(
+        repo_path_obj,
+        ambient_config.sandbox.image,
+        sandbox_network=ambient_config.sandbox.network_mode,
+        sandbox_memory=ambient_config.sandbox.resources.memory,
+        sandbox_cpus=ambient_config.sandbox.resources.cpus,
+        sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+        sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
+        sandbox_require_docker=ambient_config.sandbox.require_docker,
+        sandbox_stub=ambient_config.sandbox.stub_mode,
+        verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+    )
 
     event = AmbientEvent(
         type="debug",
@@ -439,6 +518,44 @@ telemetry:
     click.echo("1. Edit .ambient.yml to customize settings")
     click.echo("2. Build sandbox: docker build -t ambient-sandbox:latest -f docker/Dockerfile .")
     click.echo("3. Start monitoring: ambient watch .")
+
+
+@cli.group()
+def telemetry():
+    """Telemetry utilities."""
+
+
+@telemetry.command("tail")
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
+@click.option(
+    "--lines",
+    "-n",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Number of telemetry lines to show.",
+)
+def telemetry_tail(repo_path: str, config: str | None, lines: int) -> None:
+    """Print the last N telemetry events."""
+    repo_path_obj = Path(repo_path).resolve()
+
+    if config:
+        ambient_config = AmbientConfig.load_from_file(config)
+    else:
+        ambient_config = load_config(repo_path_obj)
+    ambient_config.apply_env_overrides()
+
+    telemetry_path = repo_path_obj / ambient_config.telemetry.log_path
+
+    if not telemetry_path.exists():
+        raise click.ClickException(f"Telemetry file not found: {telemetry_path}")
+
+    with open(telemetry_path, "r", encoding="utf-8") as f:
+        tail = deque(f, maxlen=max(0, lines))
+
+    for ln in tail:
+        click.echo(ln, nl=False)
 
 
 def main():

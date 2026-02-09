@@ -1,7 +1,7 @@
 """Unit tests for core data types."""
 
 import pytest
-from src.ambient.types import Proposal, RepoContext, AmbientEvent, VerificationResult, ApplyResult
+from ambient.types import Proposal, RepoContext, AmbientEvent, VerificationResult, ApplyResult
 
 
 class TestProposal:

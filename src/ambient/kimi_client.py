@@ -55,6 +55,9 @@ class KimiClient:
         Raises:
             Exception: After max retries exceeded or on client errors
         """
+        if os.getenv("AMBIENT_DISABLE_NETWORK") == "1":
+            raise RuntimeError("Network disabled via AMBIENT_DISABLE_NETWORK")
+
         if temperature is None:
             temperature = self.config.temperature
 
@@ -83,8 +86,16 @@ class KimiClient:
                             await asyncio.sleep(sleep_time + jitter)
                             continue
 
-                        # Don't retry on client errors
-                        response.raise_for_status()
+                        # Don't retry on client errors (or other non-transient server errors).
+                        body = ""
+                        try:
+                            body = response.text
+                        except Exception:
+                            body = ""
+                        snippet = body[:500] if body else ""
+                        raise RuntimeError(
+                            f"Kimi request failed: HTTP {response.status_code}. {snippet}"
+                        )
 
                 except (httpx.NetworkError, httpx.TimeoutException) as e:
                     if attempt < self.retry_max - 1:
@@ -118,6 +129,9 @@ class KimiClient:
                 if "content" in delta:
                     print(delta["content"], end="")
         """
+        if os.getenv("AMBIENT_DISABLE_NETWORK") == "1":
+            raise RuntimeError("Network disabled via AMBIENT_DISABLE_NETWORK")
+
         if temperature is None:
             temperature = self.config.temperature
 
@@ -161,6 +175,9 @@ class KimiClient:
         Returns:
             True if API responds, False otherwise
         """
+        if os.getenv("AMBIENT_DISABLE_NETWORK") == "1":
+            return False
+
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.get(f"{self.config.base_url}/models")
@@ -175,6 +192,9 @@ class KimiClient:
         Returns:
             List of model IDs
         """
+        if os.getenv("AMBIENT_DISABLE_NETWORK") == "1":
+            return []
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{self.config.base_url}/models")

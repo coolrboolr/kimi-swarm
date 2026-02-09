@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from src.ambient.risk import (
+from ambient.risk import (
     assess_risk,
     requires_approval,
     sort_by_risk_priority,
@@ -11,8 +11,8 @@ from src.ambient.risk import (
     generate_risk_report,
     _check_sensitive_files,
 )
-from src.ambient.types import Proposal
-from src.ambient.config import RiskPolicyConfig
+from ambient.types import Proposal
+from ambient.config import RiskPolicyConfig
 
 
 class TestAssessRisk:

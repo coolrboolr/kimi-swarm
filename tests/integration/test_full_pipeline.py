@@ -4,10 +4,10 @@ import tempfile
 from pathlib import Path
 import pytest
 
-from src.ambient.coordinator import AmbientCoordinator
-from src.ambient.config import AmbientConfig, KimiConfig
-from src.ambient.types import AmbientEvent
-from src.ambient.approval import AlwaysRejectHandler, AlwaysApproveHandler
+from ambient.coordinator import AmbientCoordinator
+from ambient.config import AmbientConfig, KimiConfig
+from ambient.types import AmbientEvent
+from ambient.approval import AlwaysRejectHandler, AlwaysApproveHandler
 
 
 @pytest.fixture
@@ -133,7 +133,7 @@ class TestWorkspaceIntegration:
     @pytest.mark.asyncio
     async def test_workspace_build_context(self, temp_git_repo, mock_config):
         """Test workspace context building."""
-        from src.ambient.workspace import Workspace
+        from ambient.workspace import Workspace
 
         workspace = Workspace(temp_git_repo, mock_config.sandbox.image)
 
@@ -154,8 +154,8 @@ class TestWorkspaceIntegration:
     @pytest.mark.asyncio
     async def test_workspace_apply_and_rollback(self, temp_git_repo, mock_config):
         """Test workspace patch application and rollback."""
-        from src.ambient.workspace import Workspace
-        from src.ambient.types import Proposal
+        from ambient.workspace import Workspace
+        from ambient.types import Proposal
 
         workspace = Workspace(temp_git_repo, mock_config.sandbox.image)
 
@@ -204,7 +204,7 @@ class TestApprovalIntegration:
         )
 
         # Manually create proposals
-        from src.ambient.types import Proposal
+        from ambient.types import Proposal
         proposals = [
             Proposal(
                 agent="TestAgent",
@@ -232,7 +232,6 @@ class TestApprovalIntegration:
         result = await coordinator._apply_proposals(
             proposals,
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=True
         )
 
@@ -254,7 +253,7 @@ class TestApprovalIntegration:
             AlwaysApproveHandler(config.risk_policy)
         )
 
-        from src.ambient.types import Proposal
+        from ambient.types import Proposal
         proposals = [
             Proposal(
                 agent="TestAgent",
@@ -272,7 +271,6 @@ class TestApprovalIntegration:
         result = await coordinator._apply_proposals(
             proposals,
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=False
         )
 
@@ -302,7 +300,7 @@ class TestRiskIntegration:
             AlwaysRejectHandler(config.risk_policy)
         )
 
-        from src.ambient.types import Proposal
+        from ambient.types import Proposal
         high_risk_proposal = Proposal(
             agent="SecurityGuardian",
             title="Modify auth",
@@ -319,7 +317,6 @@ class TestRiskIntegration:
         result = await coordinator._apply_proposals(
             [high_risk_proposal],
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=False  # Not dry-run, but handler will reject
         )
 
@@ -339,7 +336,7 @@ class TestContextBuilding:
         (temp_git_repo / "tests").mkdir()
         (temp_git_repo / "tests" / "test_main.py").write_text("def test_hello():\n    pass\n")
 
-        from src.ambient.workspace import Workspace
+        from ambient.workspace import Workspace
         workspace = Workspace(temp_git_repo, "ambient-sandbox:latest")
 
         event = AmbientEvent(
@@ -360,7 +357,7 @@ class TestContextBuilding:
         # Make uncommitted changes
         (temp_git_repo / "main.py").write_text("def hello():\n    print('Modified')\n")
 
-        from src.ambient.workspace import Workspace
+        from ambient.workspace import Workspace
         workspace = Workspace(temp_git_repo, "ambient-sandbox:latest")
 
         event = AmbientEvent(

@@ -4,6 +4,9 @@ FORBIDDEN_COMPONENTS = {".git", ".env", ".ssh", ".swarmguard_secrets"}
 
 
 def safe_resolve(root: Path, rel_path: str) -> Path:
+    # Normalize root to avoid false "escape" on platforms where `resolve()`
+    # canonicalizes paths (e.g., macOS /var -> /private/var).
+    root = root.resolve()
     if rel_path.startswith("/"):
         raise ValueError("Absolute paths not allowed")
     p = (root / rel_path).resolve()

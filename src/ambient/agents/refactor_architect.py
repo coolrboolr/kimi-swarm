@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ..config import KimiConfig
+from ..kimi_client import KimiClient
 from .base import SpecialistAgent
 
 
@@ -18,8 +19,8 @@ class RefactorArchitect(SpecialistAgent):
     - Improving naming (vague names like data, handle, process)
     """
 
-    def __init__(self, kimi_config: KimiConfig):
-        super().__init__(kimi_config)
+    def __init__(self, kimi_config: KimiConfig, kimi_client: KimiClient | None = None):
+        super().__init__(kimi_config, kimi_client=kimi_client)
 
     def _build_system_prompt(self) -> str:
         return """You are RefactorArchitect, an expert in software design and code quality.
