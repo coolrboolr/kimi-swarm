@@ -20,7 +20,12 @@ from .config import load_config, AmbientConfig
 from .coordinator import AmbientCoordinator
 from .workspace import Workspace
 from .types import AmbientEvent
-from .approval import ApprovalHandler, AlwaysApproveHandler, AlwaysRejectHandler
+from .approval import (
+    ApprovalHandler,
+    AlwaysApproveHandler,
+    AlwaysRejectHandler,
+    WebhookApprovalHandler,
+)
 
 
 @click.group()
@@ -43,7 +48,20 @@ def cli():
     is_flag=True,
     help="Don't apply any changes (dry run mode)",
 )
-def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool):
+@click.option(
+    "--approval-mode",
+    type=click.Choice(["interactive", "webhook"]),
+    default="interactive",
+    show_default=True,
+    help="Approval mechanism for high-risk changes.",
+)
+def watch(
+    repo_path: str,
+    config: str | None,
+    auto_approve: bool,
+    dry_run: bool,
+    approval_mode: str,
+):
     """Start continuous monitoring of repository.
 
     Watches for file changes and continuously proposes improvements.
@@ -74,8 +92,21 @@ def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool)
         click.echo("Mode: AUTO-APPROVE (all proposals will be applied)")
         approval_handler = AlwaysApproveHandler(ambient_config.risk_policy)
     else:
-        click.echo("Mode: INTERACTIVE (approval required for high-risk changes)")
-        approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
+        if approval_mode == "webhook":
+            if not ambient_config.approval.webhook.url:
+                raise click.ClickException(
+                    "approval_mode=webhook requires approval.webhook.url (or AMBIENT_APPROVAL_WEBHOOK_URL)"
+                )
+            click.echo("Mode: WEBHOOK (approval required for high-risk changes)")
+            approval_handler = WebhookApprovalHandler(
+                ambient_config.risk_policy,
+                ambient_config.approval.webhook.url,
+                headers=ambient_config.approval.webhook.headers,
+                timeout_seconds=ambient_config.approval.webhook.timeout_seconds,
+            )
+        else:
+            click.echo("Mode: INTERACTIVE (approval required for high-risk changes)")
+            approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
 
     click.echo()
     click.echo("Enabled agents:")
@@ -112,6 +143,13 @@ def watch(repo_path: str, config: str | None, auto_approve: bool, dry_run: bool)
     help="Don't apply any changes",
 )
 @click.option(
+    "--approval-mode",
+    type=click.Choice(["interactive", "webhook"]),
+    default="interactive",
+    show_default=True,
+    help="Approval mechanism for high-risk changes.",
+)
+@click.option(
     "--output",
     "-o",
     type=click.Path(),
@@ -122,6 +160,7 @@ def run_once(
     config: str | None,
     auto_approve: bool,
     dry_run: bool,
+    approval_mode: str,
     output: str | None,
 ):
     """Run a single analysis cycle.
@@ -153,8 +192,21 @@ def run_once(
         approval_handler = AlwaysApproveHandler(ambient_config.risk_policy)
         click.echo("Mode: AUTO-APPROVE")
     else:
-        approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
-        click.echo("Mode: INTERACTIVE")
+        if approval_mode == "webhook":
+            if not ambient_config.approval.webhook.url:
+                raise click.ClickException(
+                    "approval_mode=webhook requires approval.webhook.url (or AMBIENT_APPROVAL_WEBHOOK_URL)"
+                )
+            approval_handler = WebhookApprovalHandler(
+                ambient_config.risk_policy,
+                ambient_config.approval.webhook.url,
+                headers=ambient_config.approval.webhook.headers,
+                timeout_seconds=ambient_config.approval.webhook.timeout_seconds,
+            )
+            click.echo("Mode: WEBHOOK")
+        else:
+            approval_handler = ApprovalHandler(ambient_config.risk_policy, interactive=True)
+            click.echo("Mode: INTERACTIVE")
 
     click.echo()
 

@@ -604,8 +604,10 @@ class AmbientCoordinator:
                 )
 
                 # Request approval
+                assessment_payload = dict(risk_assessment)
+                assessment_payload["run_id"] = run_id
                 approved = await self.approval_handler.request_approval(
-                    proposal, risk_assessment
+                    proposal, assessment_payload
                 )
 
                 if not approved:
