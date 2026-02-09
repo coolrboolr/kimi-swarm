@@ -2,13 +2,13 @@
 
 import pytest
 
-from src.ambient.approval import (
+from ambient.approval import (
     ApprovalHandler,
     AlwaysApproveHandler,
     AlwaysRejectHandler,
 )
-from src.ambient.types import Proposal
-from src.ambient.config import RiskPolicyConfig
+from ambient.types import Proposal
+from ambient.config import RiskPolicyConfig
 
 
 @pytest.fixture

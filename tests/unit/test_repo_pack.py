@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.ambient.salvaged.repo_pack import build_repo_pack, _read_cap, IMPORTANT_FILES
+from ambient.salvaged.repo_pack import build_repo_pack, _read_cap, IMPORTANT_FILES
 
 
 class TestReadCap:

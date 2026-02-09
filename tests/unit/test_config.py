@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from src.ambient.config import (
+from ambient.config import (
     KimiConfig,
     MonitoringConfig,
     AgentsConfig,
