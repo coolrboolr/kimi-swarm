@@ -43,6 +43,7 @@ class MonitoringConfig(BaseModel):
     )
     debounce_seconds: int = 5
     check_interval_seconds: int = 300
+    max_queue_size: int = 1000
 
 
 class AgentSettings(BaseModel):
@@ -133,6 +134,10 @@ class SandboxConfig(BaseModel):
     image: str = "ambient-sandbox:latest"
     network_mode: str = "none"
     resources: SandboxResourcesConfig = Field(default_factory=SandboxResourcesConfig)
+    require_docker: bool = True
+    stub_mode: bool = False
+    enforce_allowlist: bool = True
+    allow_shell_operators: bool = False
     allowed_commands: list[str] = Field(
         default_factory=lambda: [
             r"^pytest",
@@ -150,6 +155,36 @@ class SandboxConfig(BaseModel):
     def is_command_allowed(self, command: str) -> bool:
         """Check if command matches any allowed pattern."""
         return any(re.match(pattern, command) for pattern in self.allowed_commands)
+
+
+class VerificationConfig(BaseModel):
+    """Verification behavior for checks run in the sandbox."""
+
+    timeout_seconds: int = 900
+
+
+class GitConfig(BaseModel):
+    """Git recording behavior after successful apply + verify."""
+
+    commit_on_success: bool = True
+    require_clean_before_apply: bool = True
+    commit_message_template: str = "ambient: {title} ({agent})"
+    commit_author_name: str = "Ambient Swarm"
+    commit_author_email: str = "ambient@bot.local"
+
+
+class WebhookApprovalConfig(BaseModel):
+    """Synchronous webhook approval configuration."""
+
+    url: str | None = None
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: int = 300
+
+
+class ApprovalConfig(BaseModel):
+    """Approval configuration (CLI interactive and/or webhook)."""
+
+    webhook: WebhookApprovalConfig = Field(default_factory=WebhookApprovalConfig)
 
 
 class TelemetryConfig(BaseModel):
@@ -177,6 +212,9 @@ class AmbientConfig(BaseModel):
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     risk_policy: RiskPolicyConfig = Field(default_factory=RiskPolicyConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    verification: VerificationConfig = Field(default_factory=VerificationConfig)
+    git: GitConfig = Field(default_factory=GitConfig)
+    approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
 
@@ -219,6 +257,34 @@ class AmbientConfig(BaseModel):
             self.sandbox.image = image
         if network := os.getenv("AMBIENT_SANDBOX_NETWORK"):
             self.sandbox.network_mode = network
+        if os.getenv("AMBIENT_SANDBOX_STUB") == "1":
+            self.sandbox.stub_mode = True
+        if os.getenv("AMBIENT_SANDBOX_ALLOW_SHELL_OPERATORS") == "1":
+            self.sandbox.allow_shell_operators = True
+        if os.getenv("AMBIENT_SANDBOX_DISABLE_ALLOWLIST") == "1":
+            self.sandbox.enforce_allowlist = False
+
+        # Verification overrides
+        if timeout := os.getenv("AMBIENT_VERIFY_TIMEOUT_SECONDS"):
+            self.verification.timeout_seconds = int(timeout)
+
+        # Git overrides
+        if os.getenv("AMBIENT_GIT_NO_COMMIT") == "1":
+            self.git.commit_on_success = False
+        if os.getenv("AMBIENT_GIT_ALLOW_DIRTY") == "1":
+            self.git.require_clean_before_apply = False
+        if tmpl := os.getenv("AMBIENT_GIT_COMMIT_TEMPLATE"):
+            self.git.commit_message_template = tmpl
+        if name := os.getenv("AMBIENT_GIT_AUTHOR_NAME"):
+            self.git.commit_author_name = name
+        if email := os.getenv("AMBIENT_GIT_AUTHOR_EMAIL"):
+            self.git.commit_author_email = email
+
+        # Approval overrides
+        if webhook_url := os.getenv("AMBIENT_APPROVAL_WEBHOOK_URL"):
+            self.approval.webhook.url = webhook_url
+        if webhook_timeout := os.getenv("AMBIENT_APPROVAL_WEBHOOK_TIMEOUT_SECONDS"):
+            self.approval.webhook.timeout_seconds = int(webhook_timeout)
 
         # Telemetry overrides
         if log_path := os.getenv("AMBIENT_TELEMETRY_PATH"):
