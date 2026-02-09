@@ -10,6 +10,7 @@ Commands:
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import sys
 from pathlib import Path
@@ -517,6 +518,44 @@ telemetry:
     click.echo("1. Edit .ambient.yml to customize settings")
     click.echo("2. Build sandbox: docker build -t ambient-sandbox:latest -f docker/Dockerfile .")
     click.echo("3. Start monitoring: ambient watch .")
+
+
+@cli.group()
+def telemetry():
+    """Telemetry utilities."""
+
+
+@telemetry.command("tail")
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
+@click.option(
+    "--lines",
+    "-n",
+    type=int,
+    default=50,
+    show_default=True,
+    help="Number of telemetry lines to show.",
+)
+def telemetry_tail(repo_path: str, config: str | None, lines: int) -> None:
+    """Print the last N telemetry events."""
+    repo_path_obj = Path(repo_path).resolve()
+
+    if config:
+        ambient_config = AmbientConfig.load_from_file(config)
+    else:
+        ambient_config = load_config(repo_path_obj)
+    ambient_config.apply_env_overrides()
+
+    telemetry_path = repo_path_obj / ambient_config.telemetry.log_path
+
+    if not telemetry_path.exists():
+        raise click.ClickException(f"Telemetry file not found: {telemetry_path}")
+
+    with open(telemetry_path, "r", encoding="utf-8") as f:
+        tail = deque(f, maxlen=max(0, lines))
+
+    for ln in tail:
+        click.echo(ln, nl=False)
 
 
 def main():

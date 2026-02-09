@@ -28,7 +28,7 @@ from .workspace import Workspace
 from .kimi_client import KimiClient
 from .types import AmbientEvent, Proposal
 from .salvaged.git_ops import git_commit, git_has_staged_changes, git_is_clean
-from .salvaged.telemetry import log_event
+from .salvaged.telemetry import TelemetrySink, prune_telemetry_file
 from .agents import (
     SecurityGuardian,
     RefactorArchitect,
@@ -49,14 +49,14 @@ class AmbientEventHandler(FileSystemEventHandler):
         loop: asyncio.AbstractEventLoop,
         repo_root: Path,
         ignore_patterns: list[str] | None = None,
-        telemetry_path: Path | None = None,
+        telemetry_sink: TelemetrySink | None = None,
         debounce_seconds: int = 5,
     ):
         self.event_queue = event_queue
         self.loop = loop
         self.repo_root = Path(repo_root).resolve()
         self.ignore_patterns = ignore_patterns or []
-        self.telemetry_path = telemetry_path
+        self.telemetry_sink = telemetry_sink
         self.debounce_seconds = debounce_seconds
         self._last_event_by_path: dict[str, float] = {}
 
@@ -87,24 +87,22 @@ class AmbientEventHandler(FileSystemEventHandler):
         # Always ignore certain directories/components.
         parts = Path(rel).parts
         if any(p in self._always_ignore_components for p in parts):
-            if self.telemetry_path:
-                log_event(
+            if self.telemetry_sink:
+                self.telemetry_sink.log(
                     "monitor",
                     "event_dropped",
                     {"reason": "always_ignore", "path": rel, "event_type": event.event_type},
-                    self.telemetry_path,
                 )
             return
 
         # User-configured ignore patterns (glob-style).
         for pat in self.ignore_patterns:
             if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(Path(rel).name, pat):
-                if self.telemetry_path:
-                    log_event(
+                if self.telemetry_sink:
+                    self.telemetry_sink.log(
                         "monitor",
                         "event_dropped",
                         {"reason": "ignore_pattern", "pattern": pat, "path": rel, "event_type": event.event_type},
-                        self.telemetry_path,
                     )
                 return
 
@@ -134,20 +132,18 @@ class AmbientEventHandler(FileSystemEventHandler):
         def _put_nowait() -> None:
             try:
                 self.event_queue.put_nowait(ambient_event)
-                if self.telemetry_path:
-                    log_event(
+                if self.telemetry_sink:
+                    self.telemetry_sink.log(
                         "monitor",
                         "event_enqueued",
                         {"path": rel, "event_type": event.event_type},
-                        self.telemetry_path,
                     )
             except asyncio.QueueFull:
-                if self.telemetry_path:
-                    log_event(
+                if self.telemetry_sink:
+                    self.telemetry_sink.log(
                         "monitor",
                         "event_dropped",
                         {"reason": "queue_full", "path": rel, "event_type": event.event_type},
-                        self.telemetry_path,
                     )
 
         # Enqueue in the coordinator loop (thread-safe).
@@ -169,6 +165,10 @@ class AmbientCoordinator:
     ):
         self.repo_path = Path(repo_path)
         self.config = config
+        self.telemetry = TelemetrySink(
+            enabled=self.config.telemetry.enabled,
+            path=self.repo_path / self.config.telemetry.log_path,
+        )
         self.event_queue: asyncio.Queue[AmbientEvent] = asyncio.Queue(
             maxsize=self.config.monitoring.max_queue_size
         )
@@ -232,12 +232,8 @@ class AmbientCoordinator:
 
         # Start filesystem watcher
         observer: Observer | None = None
-
-        telemetry_path = (
-            self.repo_path / self.config.telemetry.log_path
-            if self.config.telemetry.enabled
-            else None
-        )
+        if self.telemetry.enabled:
+            prune_telemetry_file(self.telemetry.path, self.config.telemetry.retention_days)
 
         if self.config.monitoring.enabled:
             observer = Observer()
@@ -246,7 +242,7 @@ class AmbientCoordinator:
                 loop=loop,
                 repo_root=self.repo_path,
                 ignore_patterns=self.config.monitoring.ignore_patterns,
-                telemetry_path=telemetry_path,
+                telemetry_sink=self.telemetry if self.telemetry.enabled else None,
                 debounce_seconds=self.config.monitoring.debounce_seconds,
             )
 
@@ -332,18 +328,12 @@ class AmbientCoordinator:
             Dict with cycle results (proposals, applications, verifications)
         """
         run_id = str(uuid.uuid4())[:8]
-        # Resolve telemetry path relative to repo_path
-        telemetry_path = self.repo_path / self.config.telemetry.log_path
 
         # Log cycle start
-        log_event(
+        self.telemetry.log(
             run_id,
             "cycle_started",
-            {
-                "event_type": event.type,
-                "event_data": event.data,
-            },
-            telemetry_path,
+            {"event_type": event.type, "event_data": event.data},
         )
 
         try:
@@ -351,14 +341,13 @@ class AmbientCoordinator:
             context = await self.workspace.build_context(event)
 
             # 2. Spawn swarm in parallel
-            proposals = await self._generate_proposals(context, run_id, telemetry_path)
+            proposals = await self._generate_proposals(context, run_id)
 
             if not proposals:
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "cycle_completed",
                     {"status": "no_proposals", "proposals_count": 0},
-                    telemetry_path,
                 )
                 return {
                     "run_id": run_id,
@@ -368,7 +357,7 @@ class AmbientCoordinator:
                 }
 
             # 3. Cross-pollination (agents refine based on each other's work)
-            refined = await self._cross_pollinate(proposals, context, run_id, telemetry_path)
+            refined = await self._cross_pollinate(proposals, context, run_id)
 
             # 4. Risk-based sorting
             sorted_proposals = sort_by_risk_priority(refined)
@@ -377,10 +366,10 @@ class AmbientCoordinator:
             # Check if we're in dry-run mode (AlwaysRejectHandler)
             dry_run = isinstance(self.approval_handler, AlwaysRejectHandler)
             results = await self._apply_proposals(
-                sorted_proposals, run_id, telemetry_path, dry_run
+                sorted_proposals, run_id, dry_run
             )
 
-            log_event(
+            self.telemetry.log(
                 run_id,
                 "cycle_completed",
                 {
@@ -389,7 +378,6 @@ class AmbientCoordinator:
                     "applied_count": len(results["applied"]),
                     "failed_count": len(results["failed"]),
                 },
-                telemetry_path,
             )
 
             return {
@@ -401,11 +389,10 @@ class AmbientCoordinator:
             }
 
         except Exception as e:
-            log_event(
+            self.telemetry.log(
                 run_id,
                 "cycle_completed",
                 {"status": "error", "error": str(e)},
-                telemetry_path,
             )
             return {
                 "run_id": run_id,
@@ -417,7 +404,6 @@ class AmbientCoordinator:
         self,
         context: Any,
         run_id: str,
-        telemetry_path: Path,
     ) -> list[Proposal]:
         """
         Generate proposals from all agents in parallel.
@@ -425,7 +411,6 @@ class AmbientCoordinator:
         Args:
             context: Repository context
             run_id: Unique run identifier
-            telemetry_path: Path to telemetry log
 
         Returns:
             List of proposals from all agents
@@ -445,16 +430,15 @@ class AmbientCoordinator:
         for i, result in enumerate(proposal_lists):
             if isinstance(result, Exception):
                 agent_name = self.agents[i].__class__.__name__
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "agent_error",
                     {"agent": agent_name, "error": str(result)},
-                    telemetry_path,
                 )
             elif result:
                 proposals.extend(result)
                 for proposal in result:
-                    log_event(
+                    self.telemetry.log(
                         run_id,
                         "proposal",
                         {
@@ -464,7 +448,6 @@ class AmbientCoordinator:
                             "files_touched": proposal.files_touched,
                             "estimated_loc_change": proposal.estimated_loc_change,
                         },
-                        telemetry_path,
                     )
 
         return proposals
@@ -474,7 +457,6 @@ class AmbientCoordinator:
         proposals: list[Proposal],
         context: Any,
         run_id: str,
-        telemetry_path: Path,
     ) -> list[Proposal]:
         """
         Cross-pollination: agents refine proposals after seeing each other's work.
@@ -486,7 +468,6 @@ class AmbientCoordinator:
             proposals: Initial proposals from all agents
             context: Repository context
             run_id: Unique run identifier
-            telemetry_path: Path to telemetry log
 
         Returns:
             Refined list of proposals
@@ -506,14 +487,10 @@ class AmbientCoordinator:
             if isinstance(result, list):
                 refined.extend(result)
 
-        log_event(
+        self.telemetry.log(
             run_id,
             "cross_pollination",
-            {
-                "original_count": len(proposals),
-                "refined_count": len(refined),
-            },
-            telemetry_path,
+            {"original_count": len(proposals), "refined_count": len(refined)},
         )
 
         return refined if refined else proposals
@@ -522,7 +499,6 @@ class AmbientCoordinator:
         self,
         proposals: list[Proposal],
         run_id: str,
-        telemetry_path: Path,
         dry_run: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
         """
@@ -531,7 +507,6 @@ class AmbientCoordinator:
         Args:
             proposals: Sorted list of proposals
             run_id: Unique run identifier
-            telemetry_path: Path to telemetry log
             dry_run: If True, skip all applications (only show proposals)
 
         Returns:
@@ -543,11 +518,10 @@ class AmbientCoordinator:
         # In dry-run mode, mark all proposals as rejected without applying
         if dry_run:
             for proposal in proposals:
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "dry_run_skip",
                     {"proposal_title": proposal.title},
-                    telemetry_path,
                 )
                 failed.append(
                     {
@@ -562,11 +536,10 @@ class AmbientCoordinator:
             if self.config.git.require_clean_before_apply:
                 try:
                     if not git_is_clean(self.repo_path):
-                        log_event(
+                        self.telemetry.log(
                             run_id,
                             "git_dirty_worktree",
                             {"proposal_title": proposal.title},
-                            telemetry_path,
                         )
                         failed.append(
                             {
@@ -591,7 +564,7 @@ class AmbientCoordinator:
 
             # Check if approval required
             if risk_assessment["requires_approval"]:
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "risk_gate_triggered",
                     {
@@ -600,7 +573,6 @@ class AmbientCoordinator:
                         "risk_factors": risk_assessment["risk_factors"],
                         "risk_score": risk_assessment["risk_score"],
                     },
-                    telemetry_path,
                 )
 
                 # Request approval
@@ -611,11 +583,10 @@ class AmbientCoordinator:
                 )
 
                 if not approved:
-                    log_event(
+                    self.telemetry.log(
                         run_id,
                         "approval_rejected",
                         {"proposal_title": proposal.title},
-                        telemetry_path,
                     )
                     failed.append(
                         {
@@ -626,11 +597,10 @@ class AmbientCoordinator:
                     )
                     continue
 
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "approval_granted",
                     {"proposal_title": proposal.title},
-                    telemetry_path,
                 )
 
             # Apply atomically (single-writer)
@@ -638,14 +608,13 @@ class AmbientCoordinator:
                 result = await self.workspace.apply_patch(proposal)
 
                 if not result.ok:
-                    log_event(
+                    self.telemetry.log(
                         run_id,
                         "apply_failed",
                         {
                             "proposal_title": proposal.title,
                             "stderr": result.stderr,
                         },
-                        telemetry_path,
                     )
                     failed.append(
                         {
@@ -662,14 +631,13 @@ class AmbientCoordinator:
                 if not verify_result.ok:
                     # Rollback
                     await self.workspace.rollback()
-                    log_event(
+                    self.telemetry.log(
                         run_id,
                         "verify_failed",
                         {
                             "proposal_title": proposal.title,
                             "results": verify_result.results,
                         },
-                        telemetry_path,
                     )
                     failed.append(
                         {
@@ -700,11 +668,10 @@ class AmbientCoordinator:
                             ]
                             message = subject + "\n\n" + "\n".join(body_lines) + "\n"
 
-                            log_event(
+                            self.telemetry.log(
                                 run_id,
                                 "git_commit_started",
                                 {"proposal_title": proposal.title, "subject": subject},
-                                telemetry_path,
                             )
                             git_commit(
                                 self.repo_path,
@@ -712,20 +679,18 @@ class AmbientCoordinator:
                                 author_name=self.config.git.commit_author_name,
                                 author_email=self.config.git.commit_author_email,
                             )
-                            log_event(
+                            self.telemetry.log(
                                 run_id,
                                 "git_commit_succeeded",
                                 {"proposal_title": proposal.title, "subject": subject},
-                                telemetry_path,
                             )
                     except Exception as e:
                         # Commit failure: rollback to avoid leaving partial/staged state.
                         await self.workspace.rollback()
-                        log_event(
+                        self.telemetry.log(
                             run_id,
                             "git_commit_failed",
                             {"proposal_title": proposal.title, "error": str(e)},
-                            telemetry_path,
                         )
                         failed.append(
                             {
@@ -737,7 +702,7 @@ class AmbientCoordinator:
                         continue
 
                 # Success!
-                log_event(
+                self.telemetry.log(
                     run_id,
                     "apply_success",
                     {
@@ -745,7 +710,6 @@ class AmbientCoordinator:
                         "stat": result.stat,
                         "verification_duration": verify_result.duration_s,
                     },
-                    telemetry_path,
                 )
                 applied.append(
                     {

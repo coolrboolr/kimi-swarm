@@ -41,6 +41,21 @@ class TelemetrySink:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+def prune_telemetry_file(telemetry_path: Path, retention_days: int) -> None:
+    """Delete telemetry file if it is older than retention_days (mtime-based)."""
+    if retention_days <= 0:
+        return
+    try:
+        if not telemetry_path.exists():
+            return
+        cutoff = time.time() - (retention_days * 86400)
+        if telemetry_path.stat().st_mtime < cutoff:
+            telemetry_path.unlink(missing_ok=True)
+    except OSError:
+        # Best-effort; telemetry should never crash the coordinator.
+        return
+
+
 def log_event(
     run_id: str,
     event_type: str,

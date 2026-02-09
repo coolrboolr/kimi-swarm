@@ -22,7 +22,7 @@ async def test_event_handler_enqueues_file_change(tmp_path: Path):
         loop=loop,
         repo_root=tmp_path,
         ignore_patterns=[],
-        telemetry_path=None,
+        telemetry_sink=None,
         debounce_seconds=0,
     )
 
@@ -51,7 +51,7 @@ async def test_event_handler_ignores_forbidden_components(tmp_path: Path):
         loop=loop,
         repo_root=tmp_path,
         ignore_patterns=[],
-        telemetry_path=None,
+        telemetry_sink=None,
         debounce_seconds=0,
     )
 
@@ -73,7 +73,7 @@ async def test_event_handler_debounces_by_path(tmp_path: Path):
         loop=loop,
         repo_root=tmp_path,
         ignore_patterns=[],
-        telemetry_path=None,
+        telemetry_sink=None,
         debounce_seconds=5,
     )
 
@@ -109,4 +109,3 @@ async def test_periodic_scan_loop_enqueues(tmp_path: Path):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-

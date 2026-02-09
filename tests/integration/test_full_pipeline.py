@@ -232,7 +232,6 @@ class TestApprovalIntegration:
         result = await coordinator._apply_proposals(
             proposals,
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=True
         )
 
@@ -272,7 +271,6 @@ class TestApprovalIntegration:
         result = await coordinator._apply_proposals(
             proposals,
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=False
         )
 
@@ -319,7 +317,6 @@ class TestRiskIntegration:
         result = await coordinator._apply_proposals(
             [high_risk_proposal],
             "test-run-id",
-            temp_git_repo / ".ambient" / "telemetry.jsonl",
             dry_run=False  # Not dry-run, but handler will reject
         )
 
