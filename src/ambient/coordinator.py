@@ -27,6 +27,7 @@ from .config import AmbientConfig
 from .workspace import Workspace
 from .kimi_client import KimiClient
 from .types import AmbientEvent, Proposal
+from .salvaged.git_ops import git_commit, git_has_staged_changes, git_is_clean
 from .salvaged.telemetry import log_event
 from .agents import (
     SecurityGuardian,
@@ -558,6 +559,33 @@ class AmbientCoordinator:
             return {"applied": applied, "failed": failed}
 
         for proposal in proposals:
+            if self.config.git.require_clean_before_apply:
+                try:
+                    if not git_is_clean(self.repo_path):
+                        log_event(
+                            run_id,
+                            "git_dirty_worktree",
+                            {"proposal_title": proposal.title},
+                            telemetry_path,
+                        )
+                        failed.append(
+                            {
+                                "proposal": proposal,
+                                "reason": "dirty_worktree",
+                                "details": "Repository has uncommitted changes",
+                            }
+                        )
+                        continue
+                except Exception as e:
+                    failed.append(
+                        {
+                            "proposal": proposal,
+                            "reason": "git_status_failed",
+                            "details": str(e),
+                        }
+                    )
+                    continue
+
             # Risk assessment
             risk_assessment = assess_risk(proposal, self.config.risk_policy, self.repo_path)
 
@@ -649,6 +677,62 @@ class AmbientCoordinator:
                         }
                     )
                     continue
+
+                # Commit (optional)
+                if self.config.git.commit_on_success:
+                    try:
+                        if git_has_staged_changes(self.repo_path):
+                            try:
+                                subject = self.config.git.commit_message_template.format(
+                                    title=proposal.title, agent=proposal.agent
+                                )
+                            except Exception:
+                                subject = f"ambient: {proposal.title} ({proposal.agent})"
+
+                            body_lines = [
+                                f"run_id: {run_id}",
+                                f"risk_level: {proposal.risk_level}",
+                                f"tags: {', '.join(proposal.tags) if proposal.tags else ''}",
+                                "files_touched:",
+                                *[f"- {p}" for p in proposal.files_touched],
+                            ]
+                            message = subject + "\n\n" + "\n".join(body_lines) + "\n"
+
+                            log_event(
+                                run_id,
+                                "git_commit_started",
+                                {"proposal_title": proposal.title, "subject": subject},
+                                telemetry_path,
+                            )
+                            git_commit(
+                                self.repo_path,
+                                message,
+                                author_name=self.config.git.commit_author_name,
+                                author_email=self.config.git.commit_author_email,
+                            )
+                            log_event(
+                                run_id,
+                                "git_commit_succeeded",
+                                {"proposal_title": proposal.title, "subject": subject},
+                                telemetry_path,
+                            )
+                    except Exception as e:
+                        # Commit failure: rollback to avoid leaving partial/staged state.
+                        await self.workspace.rollback()
+                        log_event(
+                            run_id,
+                            "git_commit_failed",
+                            {"proposal_title": proposal.title, "error": str(e)},
+                            telemetry_path,
+                        )
+                        failed.append(
+                            {
+                                "proposal": proposal,
+                                "reason": "git_commit_failed",
+                                "details": str(e),
+                            }
+                        )
+                        continue
 
                 # Success!
                 log_event(
