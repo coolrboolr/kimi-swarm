@@ -5,12 +5,40 @@ Simplified version without Ray dependencies - writes directly to JSONL files.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import time
 from pathlib import Path
 from typing import Any
 
 DEFAULT_TELEMETRY_PATH = ".ambient/telemetry.jsonl"
+
+
+@dataclass(frozen=True)
+class TelemetrySink:
+    """Thin wrapper around JSONL telemetry.
+
+    Event schema:
+      {"timestamp": <float>, "run_id": <str>, "type": <str>, "data": <object>}
+    """
+
+    enabled: bool
+    path: Path
+
+    def log(self, run_id: str, event_type: str, data: dict[str, Any]) -> None:
+        if not self.enabled:
+            return
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": time.time(),
+            "run_id": run_id,
+            "type": event_type,
+            "data": data,
+        }
+
+        with open(self.path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def log_event(
@@ -40,15 +68,4 @@ def log_event(
     if telemetry_path is None:
         telemetry_path = DEFAULT_TELEMETRY_PATH
 
-    telemetry_path = Path(telemetry_path)
-    telemetry_path.parent.mkdir(parents=True, exist_ok=True)
-
-    entry = {
-        "timestamp": time.time(),
-        "run_id": run_id,
-        "type": event_type,
-        "data": data,
-    }
-
-    with open(telemetry_path, "a") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    TelemetrySink(enabled=True, path=Path(telemetry_path)).log(run_id, event_type, data)
