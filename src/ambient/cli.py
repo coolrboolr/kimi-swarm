@@ -236,7 +236,20 @@ def verify(repo_path: str, config: str | None):
     ambient_config.apply_env_overrides()
 
     # Create workspace and run verification
-    workspace = Workspace(repo_path_obj, ambient_config.sandbox.image)
+    workspace = Workspace(
+        repo_path_obj,
+        ambient_config.sandbox.image,
+        sandbox_network=ambient_config.sandbox.network_mode,
+        sandbox_memory=ambient_config.sandbox.resources.memory,
+        sandbox_cpus=ambient_config.sandbox.resources.cpus,
+        sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+        sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
+        sandbox_require_docker=ambient_config.sandbox.require_docker,
+        sandbox_stub=ambient_config.sandbox.stub_mode,
+        verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+    )
 
     click.echo("Running verification checks...")
     click.echo()
@@ -298,7 +311,20 @@ def debug_context(repo_path: str, config: str | None, format: str):
     ambient_config.apply_env_overrides()
 
     # Build context
-    workspace = Workspace(repo_path_obj, ambient_config.sandbox.image)
+    workspace = Workspace(
+        repo_path_obj,
+        ambient_config.sandbox.image,
+        sandbox_network=ambient_config.sandbox.network_mode,
+        sandbox_memory=ambient_config.sandbox.resources.memory,
+        sandbox_cpus=ambient_config.sandbox.resources.cpus,
+        sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+        sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
+        sandbox_require_docker=ambient_config.sandbox.require_docker,
+        sandbox_stub=ambient_config.sandbox.stub_mode,
+        verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+    )
 
     event = AmbientEvent(
         type="debug",

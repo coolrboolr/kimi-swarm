@@ -34,19 +34,40 @@ class Workspace:
         self,
         repo_path: Path,
         sandbox_image: str = "ambient-sandbox:latest",
+        sandbox_network: str = "none",
         sandbox_memory: str = "2g",
         sandbox_cpus: str = "2.0",
         sandbox_pids_limit: int = 100,
+        sandbox_allowed_commands: list[str] | None = None,
+        sandbox_enforce_allowlist: bool = True,
+        sandbox_allow_shell_operators: bool = False,
+        sandbox_require_docker: bool = True,
+        sandbox_stub: bool = False,
+        verification_timeout_seconds: int = 900,
     ):
         self.repo_path = Path(repo_path)
+
+        if sandbox_allowed_commands is None:
+            # Default to config's allowlist so CLI usage remains safe even if callers
+            # only provide an image string.
+            from .config import SandboxConfig
+
+            sandbox_allowed_commands = SandboxConfig().allowed_commands
+
         self.sandbox = SandboxRunner(
             repo_root=self.repo_path,
             image=sandbox_image,
-            network="none",
+            network=sandbox_network,
             memory=sandbox_memory,
             cpus=sandbox_cpus,
             pids_limit=sandbox_pids_limit,
+            allowed_commands=sandbox_allowed_commands,
+            enforce_allowlist=sandbox_enforce_allowlist,
+            allow_shell_operators=sandbox_allow_shell_operators,
+            require_docker=sandbox_require_docker,
+            stub=sandbox_stub,
         )
+        self.verification_timeout_seconds = verification_timeout_seconds
         self._verification_checks: list[tuple[str, str]] = []
         self._auto_detect_checks()
 
@@ -58,24 +79,24 @@ class Workspace:
         if (self.repo_path / "tests").exists() or (
             self.repo_path / "test"
         ).exists():
-            self._verification_checks.append(("pytest", "pytest -xvs || true"))
+            self._verification_checks.append(("pytest", "pytest -xvs"))
 
         # Python: ruff
         if (
             (self.repo_path / "pyproject.toml").exists()
             or (self.repo_path / "ruff.toml").exists()
         ):
-            self._verification_checks.append(("ruff", "ruff check . || true"))
+            self._verification_checks.append(("ruff", "ruff check ."))
 
         # Python: mypy
         if (self.repo_path / "mypy.ini").exists() or (
             self.repo_path / "pyproject.toml"
         ).exists():
-            self._verification_checks.append(("mypy", "mypy . || true"))
+            self._verification_checks.append(("mypy", "mypy ."))
 
         # Make targets
         if (self.repo_path / "Makefile").exists():
-            self._verification_checks.append(("make-test", "make test || true"))
+            self._verification_checks.append(("make-test", "make test"))
 
     async def apply_patch(self, proposal: Proposal) -> ApplyResult:
         """
@@ -118,7 +139,10 @@ class Workspace:
         async def run_check(name: str, command: str) -> dict[str, Any]:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
-                None, self.sandbox.run, command, 900  # 15 minute timeout
+                None,
+                self.sandbox.run,
+                command,
+                self.verification_timeout_seconds,
             )
             return {
                 "name": name,
@@ -127,6 +151,9 @@ class Workspace:
                 "stdout": result["stdout"],
                 "stderr": result["stderr"],
                 "duration_s": result["duration_s"],
+                "cmd": result["cmd"],
+                "rejected": result.get("rejected", False),
+                "reject_reason": result.get("reject_reason", ""),
             }
 
         # Run all checks in parallel

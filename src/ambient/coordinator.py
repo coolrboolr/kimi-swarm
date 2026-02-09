@@ -103,9 +103,16 @@ class AmbientCoordinator:
         self.workspace = Workspace(
             self.repo_path,
             self.config.sandbox.image,
+            sandbox_network=self.config.sandbox.network_mode,
             self.config.sandbox.resources.memory,
             self.config.sandbox.resources.cpus,
             self.config.sandbox.resources.pids_limit,
+            sandbox_allowed_commands=self.config.sandbox.allowed_commands,
+            sandbox_enforce_allowlist=self.config.sandbox.enforce_allowlist,
+            sandbox_allow_shell_operators=self.config.sandbox.allow_shell_operators,
+            sandbox_require_docker=self.config.sandbox.require_docker,
+            sandbox_stub=self.config.sandbox.stub_mode,
+            verification_timeout_seconds=self.config.verification.timeout_seconds,
         )
         self.kimi_client = KimiClient(self.config.kimi)
         self.agents: list[Any] = []
