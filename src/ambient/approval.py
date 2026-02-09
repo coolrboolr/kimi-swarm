@@ -6,7 +6,10 @@ Provides CLI-based approval prompts and webhook support for external approval sy
 from __future__ import annotations
 
 import sys
+import time
 from typing import Any
+
+import httpx
 
 from .types import Proposal
 from .risk import assess_risk, generate_risk_report
@@ -128,6 +131,7 @@ class WebhookApprovalHandler(ApprovalHandler):
         self,
         policy: RiskPolicyConfig,
         webhook_url: str,
+        headers: dict[str, str] | None = None,
         timeout_seconds: int = 300,
     ):
         """
@@ -140,6 +144,7 @@ class WebhookApprovalHandler(ApprovalHandler):
         """
         super().__init__(policy, interactive=False)
         self.webhook_url = webhook_url
+        self.headers = headers or {}
         self.timeout_seconds = timeout_seconds
 
     async def request_approval(
@@ -160,9 +165,42 @@ class WebhookApprovalHandler(ApprovalHandler):
         if assessment is None:
             assessment = assess_risk(proposal, self.policy)
 
-        # TODO: Implement webhook integration
-        # For now, return False (reject)
-        return False
+        payload = {
+            "timestamp": time.time(),
+            "proposal": {
+                "agent": proposal.agent,
+                "title": proposal.title,
+                "description": proposal.description,
+                "diff": proposal.diff,
+                "risk_level": proposal.risk_level,
+                "rationale": proposal.rationale,
+                "files_touched": proposal.files_touched,
+                "estimated_loc_change": proposal.estimated_loc_change,
+                "tags": proposal.tags,
+            },
+            "assessment": assessment,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                res = await client.post(
+                    self.webhook_url,
+                    json=payload,
+                    headers=self.headers,
+                )
+        except Exception:
+            # Fail-closed on network errors/timeouts.
+            return False
+
+        if res.status_code != 200:
+            return False
+
+        try:
+            data = res.json()
+        except Exception:
+            return False
+
+        return bool(data.get("approved", False))
 
 
 class AlwaysApproveHandler(ApprovalHandler):
