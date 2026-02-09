@@ -14,6 +14,7 @@ The coordinator manages the full lifecycle:
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import time
 import uuid
 from pathlib import Path
@@ -44,11 +45,29 @@ class AmbientEventHandler(FileSystemEventHandler):
     def __init__(
         self,
         event_queue: asyncio.Queue[AmbientEvent],
+        loop: asyncio.AbstractEventLoop,
+        repo_root: Path,
+        ignore_patterns: list[str] | None = None,
+        telemetry_path: Path | None = None,
         debounce_seconds: int = 5,
     ):
         self.event_queue = event_queue
+        self.loop = loop
+        self.repo_root = Path(repo_root).resolve()
+        self.ignore_patterns = ignore_patterns or []
+        self.telemetry_path = telemetry_path
         self.debounce_seconds = debounce_seconds
-        self._last_event_time = 0.0
+        self._last_event_by_path: dict[str, float] = {}
+
+        # Defense-in-depth ignores so we don't self-trigger or watch secrets.
+        self._always_ignore_components = {
+            ".git",
+            ".ambient",
+            ".swarmguard",
+            ".swarmguard_artifacts",
+            ".pytest_cache",
+            "__pycache__",
+        }
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         """Handle any filesystem event."""
@@ -56,19 +75,53 @@ class AmbientEventHandler(FileSystemEventHandler):
         if event.is_directory:
             return
 
-        # Simple debouncing
-        current_time = time.time()
-        if current_time - self._last_event_time < self.debounce_seconds:
+        # Resolve path relative to repo_root (best-effort).
+        try:
+            src_abs = Path(str(event.src_path)).resolve()
+            rel = str(src_abs.relative_to(self.repo_root))
+        except Exception:
+            # Ignore events outside repo root or invalid paths.
             return
 
-        self._last_event_time = current_time
+        # Always ignore certain directories/components.
+        parts = Path(rel).parts
+        if any(p in self._always_ignore_components for p in parts):
+            if self.telemetry_path:
+                log_event(
+                    "monitor",
+                    "event_dropped",
+                    {"reason": "always_ignore", "path": rel, "event_type": event.event_type},
+                    self.telemetry_path,
+                )
+            return
+
+        # User-configured ignore patterns (glob-style).
+        for pat in self.ignore_patterns:
+            if fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(Path(rel).name, pat):
+                if self.telemetry_path:
+                    log_event(
+                        "monitor",
+                        "event_dropped",
+                        {"reason": "ignore_pattern", "pattern": pat, "path": rel, "event_type": event.event_type},
+                        self.telemetry_path,
+                    )
+                return
+
+        # Simple debouncing
+        current_time = time.time()
+        last = self._last_event_by_path.get(rel, 0.0)
+        if current_time - last < self.debounce_seconds:
+            return
+
+        self._last_event_by_path[rel] = current_time
 
         # Create ambient event
         ambient_event = AmbientEvent(
             type="file_change",
             data={
                 "event_type": event.event_type,
-                "src_path": event.src_path,
+                "src_path": str(src_abs),
+                "rel_path": rel,
                 "timestamp": current_time,
             },
             task_spec={
@@ -77,10 +130,27 @@ class AmbientEventHandler(FileSystemEventHandler):
             },
         )
 
-        # Enqueue in thread-safe manner
-        asyncio.run_coroutine_threadsafe(
-            self.event_queue.put(ambient_event), asyncio.get_event_loop()
-        )
+        def _put_nowait() -> None:
+            try:
+                self.event_queue.put_nowait(ambient_event)
+                if self.telemetry_path:
+                    log_event(
+                        "monitor",
+                        "event_enqueued",
+                        {"path": rel, "event_type": event.event_type},
+                        self.telemetry_path,
+                    )
+            except asyncio.QueueFull:
+                if self.telemetry_path:
+                    log_event(
+                        "monitor",
+                        "event_dropped",
+                        {"reason": "queue_full", "path": rel, "event_type": event.event_type},
+                        self.telemetry_path,
+                    )
+
+        # Enqueue in the coordinator loop (thread-safe).
+        self.loop.call_soon_threadsafe(_put_nowait)
 
 
 class AmbientCoordinator:
@@ -98,7 +168,9 @@ class AmbientCoordinator:
     ):
         self.repo_path = Path(repo_path)
         self.config = config
-        self.event_queue: asyncio.Queue[AmbientEvent] = asyncio.Queue()
+        self.event_queue: asyncio.Queue[AmbientEvent] = asyncio.Queue(
+            maxsize=self.config.monitoring.max_queue_size
+        )
         self.write_lock = asyncio.Lock()
         self.workspace = Workspace(
             self.repo_path,
@@ -118,6 +190,8 @@ class AmbientCoordinator:
             )
         else:
             self.approval_handler = approval_handler
+
+        self._periodic_task: asyncio.Task[None] | None = None
 
     def _init_agents(self) -> None:
         """Initialize specialist agents based on config."""
@@ -146,19 +220,37 @@ class AmbientCoordinator:
         self._running = True
         self._init_agents()
 
+        loop = asyncio.get_running_loop()
+
         # Start filesystem watcher
-        observer = Observer()
-        event_handler = AmbientEventHandler(
-            self.event_queue,
-            self.config.monitoring.debounce_seconds,
+        observer: Observer | None = None
+
+        telemetry_path = (
+            self.repo_path / self.config.telemetry.log_path
+            if self.config.telemetry.enabled
+            else None
         )
 
-        for watch_path in self.config.monitoring.watch_paths:
-            full_path = self.repo_path / watch_path
-            if full_path.exists():
-                observer.schedule(event_handler, str(full_path), recursive=True)
+        if self.config.monitoring.enabled:
+            observer = Observer()
+            event_handler = AmbientEventHandler(
+                self.event_queue,
+                loop=loop,
+                repo_root=self.repo_path,
+                ignore_patterns=self.config.monitoring.ignore_patterns,
+                telemetry_path=telemetry_path,
+                debounce_seconds=self.config.monitoring.debounce_seconds,
+            )
 
-        observer.start()
+            for watch_path in self.config.monitoring.watch_paths:
+                full_path = self.repo_path / watch_path
+                if full_path.exists():
+                    observer.schedule(event_handler, str(full_path), recursive=True)
+
+            observer.start()
+
+            # Periodic scan loop
+            self._periodic_task = asyncio.create_task(self._periodic_scan_loop())
 
         try:
             # Main event loop
@@ -172,8 +264,33 @@ class AmbientCoordinator:
                 except asyncio.TimeoutError:
                     continue
         finally:
-            observer.stop()
-            observer.join()
+            if self._periodic_task:
+                self._periodic_task.cancel()
+                try:
+                    await self._periodic_task
+                except asyncio.CancelledError:
+                    pass
+
+            if observer is not None:
+                observer.stop()
+                observer.join()
+
+    async def _periodic_scan_loop(self) -> None:
+        """Enqueue periodic_scan events on an interval while running."""
+        interval = max(0.1, float(self.config.monitoring.check_interval_seconds))
+        while self._running:
+            await asyncio.sleep(interval)
+            ev = AmbientEvent(
+                type="periodic_scan",
+                data={"timestamp": time.time(), "trigger": "timer"},
+                task_spec={"goal": "Periodic quality scan", "trigger": "periodic"},
+            )
+            try:
+                self.event_queue.put_nowait(ev)
+            except asyncio.QueueFull:
+                # Drop silently; queue_full is already handled for file events and
+                # will be visible via stalled cycles.
+                pass
 
     async def stop(self) -> None:
         """Stop ambient monitoring."""
