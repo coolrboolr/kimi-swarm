@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -16,6 +17,10 @@ class SandboxRunner:
         memory: str = "2g",
         cpus: str = "2.0",
         pids_limit: int = 100,
+        allowed_commands: list[str] | None = None,
+        enforce_allowlist: bool = False,
+        allow_shell_operators: bool = False,
+        require_docker: bool = True,
     ):
         self.repo_root = repo_root
         self.image = image
@@ -25,6 +30,29 @@ class SandboxRunner:
         self.memory = memory
         self.cpus = cpus
         self.pids_limit = pids_limit
+        self.allowed_commands = allowed_commands or []
+        self.enforce_allowlist = enforce_allowlist
+        self.allow_shell_operators = allow_shell_operators
+        self.require_docker = require_docker
+
+        self._allowed_res = [re.compile(p) for p in self.allowed_commands]
+
+    def _check_command_allowed(self, cmd: str) -> tuple[bool, str]:
+        cmd = cmd.strip()
+
+        if not self.allow_shell_operators:
+            # Block obvious shell metacharacters/chaining unless explicitly allowed.
+            # This is defense-in-depth since we execute via shell (stub) / bash -lc (docker).
+            blocked = [";", "&&", "||", "`", "$("]
+            for tok in blocked:
+                if tok in cmd:
+                    return False, f"Shell operator not allowed: {tok}"
+
+        if self.enforce_allowlist and self._allowed_res:
+            if not any(r.match(cmd) for r in self._allowed_res):
+                return False, "Command not in allowlist"
+
+        return True, ""
 
     def run(self, cmd: str, timeout_s: int = 900) -> dict[str, Any]:
         t0 = time.time()
@@ -36,6 +64,19 @@ class SandboxRunner:
                 "stderr": "Forced sandbox failure via SWARMGUARD_FAIL_SANDBOX_RUN",
                 "duration_s": 0.0,
             }
+
+        ok, reason = self._check_command_allowed(cmd)
+        if not ok:
+            return {
+                "cmd": cmd,
+                "exit_code": 126,
+                "stdout": "",
+                "stderr": f"Sandbox rejected command: {reason}",
+                "duration_s": round(time.time() - t0, 3),
+                "rejected": True,
+                "reject_reason": reason,
+            }
+
         if self.stub or os.getenv("SWARMGUARD_SANDBOX_STUB") == "1":
             p = subprocess.run(
                 cmd,
@@ -52,6 +93,25 @@ class SandboxRunner:
                 "stderr": p.stderr,
                 "duration_s": round(time.time() - t0, 3),
             }
+
+        # Docker execution path
+        if self.require_docker:
+            try:
+                subprocess.run(
+                    ["docker", "--version"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            except FileNotFoundError:
+                return {
+                    "cmd": cmd,
+                    "exit_code": 127,
+                    "stdout": "",
+                    "stderr": "Docker is required but was not found on PATH",
+                    "duration_s": round(time.time() - t0, 3),
+                }
+
         docker_cmd = [
             "docker",
             "run",
@@ -86,16 +146,25 @@ class SandboxRunner:
                         main_git_dir = Path(*gitdir_path.parts[:idx])
                     if main_git_dir.exists():
                         docker_cmd[5:5] = ["-v", f"{main_git_dir}:{main_git_dir}"]
-        p = subprocess.run(
-            docker_cmd,
-            text=True,
-            capture_output=True,
-            timeout=timeout_s,
-        )
-        return {
-            "cmd": cmd,
-            "exit_code": p.returncode,
-            "stdout": p.stdout,
-            "stderr": p.stderr,
-            "duration_s": round(time.time() - t0, 3),
-        }
+        try:
+            p = subprocess.run(
+                docker_cmd,
+                text=True,
+                capture_output=True,
+                timeout=timeout_s,
+            )
+            return {
+                "cmd": cmd,
+                "exit_code": p.returncode,
+                "stdout": p.stdout,
+                "stderr": p.stderr,
+                "duration_s": round(time.time() - t0, 3),
+            }
+        except FileNotFoundError:
+            return {
+                "cmd": cmd,
+                "exit_code": 127,
+                "stdout": "",
+                "stderr": "Docker is required but was not found on PATH",
+                "duration_s": round(time.time() - t0, 3),
+            }

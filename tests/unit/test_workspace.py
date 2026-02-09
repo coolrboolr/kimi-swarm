@@ -149,7 +149,7 @@ class TestWorkspaceVerification:
         (git_repo / "test_dummy.py").write_text("def test_pass():\n    assert True\n")
 
         workspace = Workspace(git_repo, sandbox_image="unused")
-        workspace._verification_checks = [("pytest", "python -c 'exit(0)'")]
+        workspace._verification_checks = [("pytest", "pytest -q")]
 
         result = await workspace.verify_changes()
 
