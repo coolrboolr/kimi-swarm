@@ -18,6 +18,46 @@ def git_reset_hard_clean(root: Path) -> None:
     _run(root, ["git", "clean", "-fd"])
 
 
+def git_status_porcelain(root: Path) -> list[str]:
+    """Return `git status --porcelain` lines (empty list means clean)."""
+    res = _run(root, ["git", "status", "--porcelain"])
+    if res.returncode != 0:
+        raise RuntimeError(f"git status failed: {res.stderr}")
+    return [ln for ln in res.stdout.splitlines() if ln.strip()]
+
+
+def git_has_staged_changes(root: Path) -> bool:
+    """True if index has changes (`git diff --cached --quiet` is non-zero)."""
+    res = _run(root, ["git", "diff", "--cached", "--quiet"])
+    # 0 = no changes, 1 = changes, other = error
+    if res.returncode == 0:
+        return False
+    if res.returncode == 1:
+        return True
+    raise RuntimeError(f"git diff --cached failed: {res.stderr}")
+
+
+def git_is_clean(
+    root: Path,
+    ignored_untracked_prefixes: list[str] | None = None,
+) -> bool:
+    """True if worktree has no changes, ignoring selected untracked prefixes."""
+    ignored_untracked_prefixes = ignored_untracked_prefixes or [
+        ".ambient/",
+        ".swarmguard/",
+        ".swarmguard_artifacts/",
+        ".pytest_cache/",
+    ]
+    for ln in git_status_porcelain(root):
+        # "?? path" indicates untracked.
+        if ln.startswith("?? "):
+            path = ln[3:]
+            if any(path.startswith(pfx) for pfx in ignored_untracked_prefixes):
+                continue
+        return False
+    return True
+
+
 def git_apply_patch_atomic(root: Path, unified_diff: str) -> dict[str, Any]:
     def clean_patch(diff: str) -> str:
         cleaned = diff.replace("\r\n", "\n").replace("\r", "\n").strip()
@@ -356,11 +396,16 @@ def git_add(root: Path, paths: list[str] | None = None) -> None:
         raise RuntimeError(f"git add failed: {res.stderr}")
 
 
-def git_commit(root: Path, message: str) -> None:
+def git_commit(
+    root: Path,
+    message: str,
+    author_name: str = "SwarmGuard Bot",
+    author_email: str = "swarmguard@bot.com",
+) -> None:
     # Configure user for commit if needed?
     # Assume global config or env vars set or we set local config
-    _run(root, ["git", "config", "user.email", "swarmguard@bot.com"])
-    _run(root, ["git", "config", "user.name", "SwarmGuard Bot"])
+    _run(root, ["git", "config", "user.email", author_email])
+    _run(root, ["git", "config", "user.name", author_name])
 
     res = _run(root, ["git", "commit", "-m", message])
     if res.returncode != 0 and "nothing to commit" not in res.stdout:
