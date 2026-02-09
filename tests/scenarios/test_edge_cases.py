@@ -447,12 +447,10 @@ class TestPathSafetyEdgeCases:
     """Tests for path safety edge cases."""
 
     def test_resolve_current_directory(self):
-        """Test resolving current directory (.) is rejected."""
+        """Test resolving current directory (.) resolves to root."""
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            # Current directory "." resolves to root, which fails the safety check
-            with pytest.raises(ValueError, match="escape"):
-                safe_resolve(root, ".")
+            assert safe_resolve(root, ".") == root.resolve()
 
     def test_resolve_parent_directory(self):
         """Test resolving parent directory (..)."""
