@@ -364,3 +364,15 @@ class TestAllAgents:
 
         assert len(proposals) == 1
         assert any(tag in proposals[0].tags for tag in expected_tags)
+
+
+def test_agent_uses_injected_kimi_client(kimi_config):
+    """Agents should use the injected KimiClient instance when provided."""
+    from unittest.mock import Mock
+
+    from ambient.kimi_client import KimiClient
+
+    mock_client = Mock(spec=KimiClient)
+    agent = SecurityGuardian(kimi_config, kimi_client=mock_client)
+
+    assert agent.kimi_client is mock_client

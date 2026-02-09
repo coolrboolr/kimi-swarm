@@ -21,8 +21,10 @@ from ..types import Proposal, RepoContext
 class SpecialistAgent(ABC):
     """Base class for all specialist agents."""
 
-    def __init__(self, kimi_config: KimiConfig):
-        self.kimi_client = KimiClient(kimi_config)
+    def __init__(self, kimi_config: KimiConfig, kimi_client: KimiClient | None = None):
+        # Allow dependency injection for testing and for sharing a single client
+        # instance across all agents (shared concurrency limits, shared mocking).
+        self.kimi_client = kimi_client or KimiClient(kimi_config)
         self.system_prompt = self._build_system_prompt()
 
     @abstractmethod
