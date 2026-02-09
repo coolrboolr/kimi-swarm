@@ -219,7 +219,7 @@ class AmbientCoordinator:
         for agent_name in enabled_agents:
             if agent_name in agent_classes:
                 agent_class = agent_classes[agent_name]
-                agent = agent_class(self.config.kimi)
+                agent = agent_class(self.config.kimi, kimi_client=self.kimi_client)
                 self.agents.append(agent)
 
     async def start(self) -> None:
