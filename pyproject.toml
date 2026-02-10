@@ -62,8 +62,8 @@ addopts = [
     "--strict-markers",
     "--tb=short",
 ]
-# Don't collect test classes from source code
-norecursedirs = ["src", ".*", "build", "dist"]
+# Don't collect test classes from source code or tests embedded in fixture repositories.
+norecursedirs = ["src", ".*", "build", "dist", "fixtures"]
 
 [tool.coverage.run]
 source = ["src"]

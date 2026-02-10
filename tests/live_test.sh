@@ -16,7 +16,7 @@ echo -e "${BLUE}======================================${NC}"
 echo ""
 
 # Configuration
-TEST_REPO="tests/fixtures/test_repo"
+FIXTURE_REPO="tests/fixtures/test_repo"
 RESULTS_DIR="tests/live/results"
 
 # Create results directory
@@ -67,10 +67,21 @@ echo ""
 
 # Test 1: Dry Run
 echo -e "${BLUE}Test 1: Dry Run (No Changes Applied)${NC}"
-echo -e "${YELLOW}Running: ambient run-once $TEST_REPO --dry-run${NC}"
+echo -e "${YELLOW}Running: ambient run-once <temp_repo> --dry-run${NC}"
 echo ""
 
-time ambient run-once "$TEST_REPO" --dry-run -o "$RESULTS_DIR/dry-run.json" 2>&1 | tee "$RESULTS_DIR/dry-run.log"
+TMP_REPO="$(mktemp -d)"
+trap 'rm -rf "$TMP_REPO"' EXIT
+
+# Build a clean git repo from the fixture files (do not rely on a checked-in .git directory).
+rsync -a --exclude ".git" --exclude ".ambient" --exclude "__pycache__" "$FIXTURE_REPO/" "$TMP_REPO/"
+git -C "$TMP_REPO" init -q
+git -C "$TMP_REPO" config user.email "ambient@test.local"
+git -C "$TMP_REPO" config user.name "Ambient Test"
+git -C "$TMP_REPO" add -A
+git -C "$TMP_REPO" commit -qm "fixture: init"
+
+time ambient run-once "$TMP_REPO" --dry-run -o "$RESULTS_DIR/dry-run.json" 2>&1 | tee "$RESULTS_DIR/dry-run.log"
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ Test 1 passed${NC}"
@@ -98,11 +109,11 @@ fi
 
 echo ""
 echo "Telemetry log:"
-if [ -f "$TEST_REPO/.ambient/telemetry.jsonl" ]; then
-    echo "Event count: $(wc -l < $TEST_REPO/.ambient/telemetry.jsonl)"
+if [ -f "$TMP_REPO/.ambient/telemetry.jsonl" ]; then
+    echo "Event count: $(wc -l < $TMP_REPO/.ambient/telemetry.jsonl)"
     echo ""
     echo "Events by type:"
-    cat "$TEST_REPO/.ambient/telemetry.jsonl" | jq -r '.type' | sort | uniq -c
+    cat "$TMP_REPO/.ambient/telemetry.jsonl" | jq -r '.type' | sort | uniq -c
 fi
 
 echo ""
@@ -110,4 +121,4 @@ echo -e "${GREEN}Live testing complete!${NC}"
 echo ""
 echo "Results saved to: $RESULTS_DIR/"
 echo "View full log: cat $RESULTS_DIR/dry-run.log"
-echo "View telemetry: cat $TEST_REPO/.ambient/telemetry.jsonl | jq ."
+echo "View telemetry: cat $TMP_REPO/.ambient/telemetry.jsonl | jq ."

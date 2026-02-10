@@ -113,3 +113,10 @@ Temporary Items
 .claude/
 
 tests/live/*
+
+# Prevent committing local transcripts / captures
+end of claude.md
+
+# Never check in a nested git repo under fixtures
+tests/fixtures/**/.git
+tests/fixtures/**/.git/
