@@ -40,16 +40,40 @@ class SandboxRunner:
     def _check_command_allowed(self, cmd: str) -> tuple[bool, str]:
         cmd = cmd.strip()
 
-        if not self.allow_shell_operators:
+        if not cmd:
+            return False, "Empty command"
+
+        # Reject multi-line commands to prevent allowlist prefix tricks and implicit chaining.
+        if any(ch in cmd for ch in ["\n", "\r", "\x00"]):
+            return False, "Newlines/NUL not allowed"
+
+        # Shell metacharacters are only meaningfully dangerous when allowlist enforcement
+        # is enabled, since we execute via a shell (stub) / bash -lc (docker).
+        if self.enforce_allowlist and (not self.allow_shell_operators):
             # Block obvious shell metacharacters/chaining unless explicitly allowed.
             # This is defense-in-depth since we execute via shell (stub) / bash -lc (docker).
-            blocked = [";", "&&", "||", "`", "$("]
+            blocked = [
+                ";",
+                "&&",
+                "||",
+                "|",
+                "&",
+                ">",
+                "<",
+                "`",
+                "$(",
+                "${",  # avoid parameter expansions in command position
+            ]
             for tok in blocked:
                 if tok in cmd:
                     return False, f"Shell operator not allowed: {tok}"
 
-        if self.enforce_allowlist and self._allowed_res:
-            if not any(r.match(cmd) for r in self._allowed_res):
+        if self.enforce_allowlist:
+            if not self._allowed_res:
+                return False, "Allowlist enforcement enabled but allowlist is empty"
+
+            # Use fullmatch to avoid allowing extra trailing payload beyond the allowlisted shape.
+            if not any(r.fullmatch(cmd) for r in self._allowed_res):
                 return False, "Command not in allowlist"
 
         return True, ""

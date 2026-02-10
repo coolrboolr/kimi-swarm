@@ -251,6 +251,39 @@ class TestWebhookApprovalHandler:
 
         assert await handler.request_approval(sample_proposal, sample_assessment) is False
 
+    @pytest.mark.asyncio
+    async def test_webhook_string_false_is_not_approved(self, sample_proposal, sample_assessment, monkeypatch):
+        class DummyResponse:
+            status_code = 200
+
+            def json(self):
+                return {"approved": "false"}
+
+        class DummyClient:
+            def __init__(self, timeout):  # noqa: D401,ARG002
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, json, headers=None):  # noqa: ARG002
+                return DummyResponse()
+
+        import ambient.approval as approval_mod
+
+        monkeypatch.setattr(approval_mod.httpx, "AsyncClient", DummyClient)
+
+        handler = WebhookApprovalHandler(
+            RiskPolicyConfig(),
+            webhook_url="https://example.test/approve",
+            timeout_seconds=1,
+        )
+
+        assert await handler.request_approval(sample_proposal, sample_assessment) is False
+
 
 class TestApprovalHandlerInheritance:
     """Tests for approval handler inheritance."""
