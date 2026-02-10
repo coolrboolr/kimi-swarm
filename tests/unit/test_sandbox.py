@@ -170,7 +170,7 @@ class TestSandboxRunner:
             repo_root=test_repo,
             image="unused",
             stub=True,
-            allowed_commands=[r"^echo\b"],
+            allowed_commands=[r"^echo\b(?:\s+.*)?$"],
             enforce_allowlist=True,
         )
 
@@ -187,7 +187,7 @@ class TestSandboxRunner:
             repo_root=test_repo,
             image="unused",
             stub=True,
-            allowed_commands=[r"^echo\b"],
+            allowed_commands=[r"^echo\b(?:\s+.*)?$"],
             enforce_allowlist=True,
             allow_shell_operators=False,
         )
@@ -195,6 +195,49 @@ class TestSandboxRunner:
         rejected = sandbox.run("echo ok; echo nope")
         assert rejected["exit_code"] == 126
         assert "Shell operator not allowed" in rejected["stderr"]
+
+    def test_newlines_rejected_even_if_prefix_allowed(self, test_repo):
+        """Prevent allowlist bypass via embedded newlines."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+            allowed_commands=[r"^pytest(?:\s+.*)?$"],
+            enforce_allowlist=True,
+        )
+
+        rejected = sandbox.run("pytest -q\nuname -a")
+        assert rejected["exit_code"] == 126
+        assert "Newlines" in rejected["stderr"]
+
+    def test_pipes_rejected_by_default(self, test_repo):
+        """Prevent allowlist bypass via pipes when shell operators are disallowed."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+            allowed_commands=[r"^pytest(?:\s+.*)?$"],
+            enforce_allowlist=True,
+            allow_shell_operators=False,
+        )
+
+        rejected = sandbox.run("pytest -q | cat")
+        assert rejected["exit_code"] == 126
+        assert "Shell operator not allowed" in rejected["stderr"]
+
+    def test_fail_closed_when_allowlist_empty(self, test_repo):
+        """If allowlist enforcement is enabled with an empty allowlist, reject all."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+            allowed_commands=[],
+            enforce_allowlist=True,
+        )
+
+        rejected = sandbox.run("echo ok")
+        assert rejected["exit_code"] == 126
+        assert "allowlist is empty" in rejected["stderr"].lower()
 
     @pytest.mark.skipif(
         os.getenv("SKIP_DOCKER_TESTS") == "1",

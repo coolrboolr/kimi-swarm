@@ -140,21 +140,21 @@ class SandboxConfig(BaseModel):
     allow_shell_operators: bool = False
     allowed_commands: list[str] = Field(
         default_factory=lambda: [
-            r"^pytest",
-            r"^python\s+-m\s+pytest",
-            r"^ruff\s+(check|format)",
-            r"^mypy",
-            r"^flake8",
-            r"^cargo\s+(test|check|clippy)",
-            r"^npm\s+test",
-            r"^make\s+(test|lint|check)",
-            r"^git\s+(status|diff|log|show)",
+            r"^pytest(?:\s+.*)?$",
+            r"^python\s+-m\s+pytest(?:\s+.*)?$",
+            r"^ruff\s+(check|format)(?:\s+.*)?$",
+            r"^mypy(?:\s+.*)?$",
+            r"^flake8(?:\s+.*)?$",
+            r"^cargo\s+(test|check|clippy)(?:\s+.*)?$",
+            r"^npm\s+test(?:\s+.*)?$",
+            r"^make\s+(test|lint|check)(?:\s+.*)?$",
+            r"^git\s+(status|diff|log|show)(?:\s+.*)?$",
         ]
     )
 
     def is_command_allowed(self, command: str) -> bool:
         """Check if command matches any allowed pattern."""
-        return any(re.match(pattern, command) for pattern in self.allowed_commands)
+        return any(re.fullmatch(pattern, command.strip()) for pattern in self.allowed_commands)
 
 
 class VerificationConfig(BaseModel):

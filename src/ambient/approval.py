@@ -200,7 +200,21 @@ class WebhookApprovalHandler(ApprovalHandler):
         except Exception:
             return False
 
-        return bool(data.get("approved", False))
+        approved = data.get("approved", False)
+        if approved is True:
+            return True
+        if approved is False or approved is None:
+            return False
+        if isinstance(approved, str):
+            val = approved.strip().lower()
+            if val in {"true", "1", "yes", "y", "approve", "approved"}:
+                return True
+            if val in {"false", "0", "no", "n", "reject", "rejected", ""}:
+                return False
+            return False
+        if isinstance(approved, int):
+            return approved == 1
+        return False
 
 
 class AlwaysApproveHandler(ApprovalHandler):
