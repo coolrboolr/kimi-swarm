@@ -133,22 +133,31 @@ class SandboxRunner:
             merged_env.update(env)
 
         if self.stub or os.getenv("AMBIENT_SANDBOX_STUB") == "1" or os.getenv("SWARMGUARD_SANDBOX_STUB") == "1":
-            p = subprocess.run(
-                argv,
-                cwd=str(self.repo_root),
-                text=True,
-                capture_output=True,
-                timeout=timeout_s,
-                shell=False,
-                env=merged_env,
-            )
-            return {
-                "argv": argv,
-                "exit_code": p.returncode,
-                "stdout": p.stdout,
-                "stderr": p.stderr,
-                "duration_s": round(time.time() - t0, 3),
-            }
+            try:
+                p = subprocess.run(
+                    argv,
+                    cwd=str(self.repo_root),
+                    text=True,
+                    capture_output=True,
+                    timeout=timeout_s,
+                    shell=False,
+                    env=merged_env,
+                )
+                return {
+                    "argv": argv,
+                    "exit_code": p.returncode,
+                    "stdout": p.stdout,
+                    "stderr": p.stderr,
+                    "duration_s": round(time.time() - t0, 3),
+                }
+            except FileNotFoundError:
+                return {
+                    "argv": argv,
+                    "exit_code": 127,
+                    "stdout": "",
+                    "stderr": f"Command not found: {argv[0] if argv else ''}",
+                    "duration_s": round(time.time() - t0, 3),
+                }
 
         # Docker execution path
         if self.require_docker:

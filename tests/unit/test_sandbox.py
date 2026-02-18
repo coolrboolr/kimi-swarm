@@ -80,6 +80,19 @@ class TestSandboxRunner:
 
         assert result["exit_code"] == 42
 
+    def test_stub_mode_missing_executable_returns_structured_error(self, test_repo):
+        """Missing binaries should not raise; return structured 127 result."""
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+            stub=True,
+        )
+
+        result = sandbox.run(["definitely-not-a-real-binary-ambient-test"])
+
+        assert result["exit_code"] == 127
+        assert "Command not found" in result["stderr"]
+
     def test_forced_failure_mode(self, test_repo):
         """Test forced failure mode via fail_run parameter."""
         sandbox = SandboxRunner(
