@@ -1,11 +1,9 @@
 """Unit tests for safe_paths.py - path safety validation."""
 
-import pytest
-from pathlib import Path
-import tempfile
-import os
 
-from ambient.salvaged.safe_paths import safe_resolve, FORBIDDEN_COMPONENTS
+import pytest
+
+from ambient.salvaged.safe_paths import FORBIDDEN_COMPONENTS, safe_resolve
 
 
 class TestSafeResolve:

@@ -8,7 +8,8 @@ from __future__ import annotations
 import asyncio
 import os
 import random
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any, cast
 
 import httpx
 
@@ -77,7 +78,7 @@ class KimiClient:
                         )
 
                         if response.status_code == 200:
-                            return response.json()
+                            return cast(dict[str, Any], response.json())
 
                         # Retry on transient errors
                         if response.status_code in [429, 503, 504]:

@@ -12,7 +12,6 @@ from typing import Any
 
 from .types import Proposal
 
-
 _RISK_WEIGHT = {"critical": 40, "high": 30, "medium": 20, "low": 10}
 _TAG_BONUS = {
     "security": 6,

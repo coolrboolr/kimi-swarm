@@ -11,9 +11,9 @@ from typing import Any
 
 import httpx
 
-from .types import Proposal
-from .risk import assess_risk, generate_risk_report
 from .config import RiskPolicyConfig
+from .risk import assess_risk, generate_risk_report
+from .types import Proposal
 
 
 class ApprovalHandler:

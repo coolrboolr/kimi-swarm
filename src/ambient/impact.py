@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 _DIFF_PATH_RE = re.compile(r"^\+\+\+ b/(.+)$", re.MULTILINE)
 _IMPORT_RE = re.compile(
     r"^\s*(?:from\s+([\w\.]+)\s+import\s+|import\s+([\w\.,\s]+))",

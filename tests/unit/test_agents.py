@@ -1,17 +1,18 @@
 """Unit tests for specialist agents."""
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import AsyncMock, Mock
 
 from ambient.agents import (
-    SecurityGuardian,
-    RefactorArchitect,
-    StyleEnforcer,
     PerformanceOptimizer,
+    RefactorArchitect,
+    SecurityGuardian,
+    StyleEnforcer,
     TestEnhancer,
 )
 from ambient.config import KimiConfig
-from ambient.types import RepoContext, Proposal
+from ambient.types import Proposal, RepoContext
 
 
 @pytest.fixture
@@ -368,7 +369,6 @@ class TestAllAgents:
 
 def test_agent_uses_injected_kimi_client(kimi_config):
     """Agents should use the injected KimiClient instance when provided."""
-    from unittest.mock import Mock
 
     from ambient.kimi_client import KimiClient
 

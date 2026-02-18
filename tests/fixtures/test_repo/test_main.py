@@ -6,7 +6,6 @@ TEST ISSUE: Missing tests for:
 - DataProcessor class
 """
 
-import pytest
 from main import find_matching_items, validate_email
 
 

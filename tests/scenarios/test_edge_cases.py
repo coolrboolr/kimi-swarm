@@ -1,15 +1,15 @@
 """Scenario tests for edge cases and determinism."""
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from src.ambient.types import Proposal
-from src.ambient.risk import assess_risk, sort_by_risk_priority
+import pytest
+
 from src.ambient.config import RiskPolicyConfig
+from src.ambient.risk import assess_risk, sort_by_risk_priority
 from src.ambient.salvaged.git_ops import git_apply_patch_atomic
 from src.ambient.salvaged.safe_paths import safe_resolve
-from src.ambient.agents.base import SpecialistAgent
+from src.ambient.types import Proposal
 
 
 class TestDeterminism:

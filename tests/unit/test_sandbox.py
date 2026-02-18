@@ -1,9 +1,9 @@
 """Unit tests for sandbox.py - Docker sandbox execution."""
 
 import os
-import pytest
-from pathlib import Path
 import subprocess
+
+import pytest
 
 from ambient.salvaged.sandbox import SandboxRunner
 
@@ -49,7 +49,7 @@ class TestSandboxRunner:
             stub=True,
         )
 
-        result = sandbox.run("echo 'Hello from stub'")
+        result = sandbox.run(["python", "-c", "print('Hello from stub')"])
 
         assert result["exit_code"] == 0
         assert "Hello from stub" in result["stdout"]
@@ -63,7 +63,7 @@ class TestSandboxRunner:
             stub=True,
         )
 
-        result = sandbox.run("python test.py")
+        result = sandbox.run(["python", "test.py"])
 
         assert result["exit_code"] == 0
         assert "Hello from test repo" in result["stdout"]
@@ -76,7 +76,7 @@ class TestSandboxRunner:
             stub=True,
         )
 
-        result = sandbox.run("exit 42")
+        result = sandbox.run(["python", "-c", "import sys; sys.exit(42)"])
 
         assert result["exit_code"] == 42
 
@@ -88,35 +88,35 @@ class TestSandboxRunner:
             fail_run=True,
         )
 
-        result = sandbox.run("echo 'This should fail'")
+        result = sandbox.run(["python", "-c", "print('This should fail')"])
 
         assert result["exit_code"] == 1
         assert "Forced sandbox failure" in result["stderr"]
 
     def test_forced_failure_via_env_var(self, test_repo, monkeypatch):
         """Test forced failure mode via environment variable."""
-        monkeypatch.setenv("SWARMGUARD_FAIL_SANDBOX_RUN", "1")
+        monkeypatch.setenv("AMBIENT_FAIL_SANDBOX_RUN", "1")
 
         sandbox = SandboxRunner(
             repo_root=test_repo,
             image="unused",
         )
 
-        result = sandbox.run("echo 'This should fail'")
+        result = sandbox.run(["python", "-c", "print('This should fail')"])
 
         assert result["exit_code"] == 1
         assert "Forced sandbox failure" in result["stderr"]
 
     def test_stub_mode_via_env_var(self, test_repo, monkeypatch):
         """Test stub mode via environment variable."""
-        monkeypatch.setenv("SWARMGUARD_SANDBOX_STUB", "1")
+        monkeypatch.setenv("AMBIENT_SANDBOX_STUB", "1")
 
         sandbox = SandboxRunner(
             repo_root=test_repo,
             image="unused",
         )
 
-        result = sandbox.run("echo 'Stub via env'")
+        result = sandbox.run(["python", "-c", "print('Stub via env')"])
 
         assert result["exit_code"] == 0
         assert "Stub via env" in result["stdout"]
@@ -139,6 +139,17 @@ class TestSandboxRunner:
         )
         assert sandbox_host.network == "host"
 
+    def test_back_compat_swarmguard_env_vars(self, test_repo, monkeypatch):
+        """Old SWARMGUARD_* env vars still work for compatibility."""
+        monkeypatch.setenv("SWARMGUARD_SANDBOX_STUB", "1")
+
+        sandbox = SandboxRunner(
+            repo_root=test_repo,
+            image="unused",
+        )
+        result = sandbox.run(["python", "-c", "print('ok')"])
+        assert result["exit_code"] == 0
+
     def test_timeout_in_stub_mode(self, test_repo):
         """Test timeout enforcement in stub mode."""
         sandbox = SandboxRunner(
@@ -149,20 +160,20 @@ class TestSandboxRunner:
 
         # This should timeout after 1 second
         with pytest.raises(subprocess.TimeoutExpired):
-            sandbox.run("sleep 10", timeout_s=1)
+            sandbox.run(["sleep", "10"], timeout_s=1)
 
-    def test_command_string_preserved(self, test_repo):
-        """Test that command string is preserved in result."""
+    def test_argv_preserved(self, test_repo):
+        """Test that argv is preserved in result."""
         sandbox = SandboxRunner(
             repo_root=test_repo,
             image="unused",
             stub=True,
         )
 
-        cmd = "echo 'test command'"
-        result = sandbox.run(cmd)
+        argv = ["python", "-c", "print('test command')"]
+        result = sandbox.run(argv)
 
-        assert result["cmd"] == cmd
+        assert result["argv"] == argv
 
     def test_allowlist_enforced_rejects_disallowed(self, test_repo):
         """Test allowlist enforcement rejects commands not matching patterns."""
@@ -170,31 +181,16 @@ class TestSandboxRunner:
             repo_root=test_repo,
             image="unused",
             stub=True,
-            allowed_commands=[r"^echo\b(?:\s+.*)?$"],
+            allowed_argv=[["python", "-c"]],
             enforce_allowlist=True,
         )
 
-        allowed = sandbox.run("echo 'ok'")
+        allowed = sandbox.run(["python", "-c", "print('ok')"])
         assert allowed["exit_code"] == 0
 
-        rejected = sandbox.run("ls")
+        rejected = sandbox.run(["ls"])
         assert rejected["exit_code"] == 126
         assert "rejected" in rejected and rejected["rejected"] is True
-
-    def test_shell_operators_blocked_by_default(self, test_repo):
-        """Test that basic shell chaining is rejected unless explicitly allowed."""
-        sandbox = SandboxRunner(
-            repo_root=test_repo,
-            image="unused",
-            stub=True,
-            allowed_commands=[r"^echo\b(?:\s+.*)?$"],
-            enforce_allowlist=True,
-            allow_shell_operators=False,
-        )
-
-        rejected = sandbox.run("echo ok; echo nope")
-        assert rejected["exit_code"] == 126
-        assert "Shell operator not allowed" in rejected["stderr"]
 
     def test_newlines_rejected_even_if_prefix_allowed(self, test_repo):
         """Prevent allowlist bypass via embedded newlines."""
@@ -202,28 +198,13 @@ class TestSandboxRunner:
             repo_root=test_repo,
             image="unused",
             stub=True,
-            allowed_commands=[r"^pytest(?:\s+.*)?$"],
+            allowed_argv=[["python", "-c"]],
             enforce_allowlist=True,
         )
 
-        rejected = sandbox.run("pytest -q\nuname -a")
+        rejected = sandbox.run(["python", "-c", "print('x')\nuname -a"])
         assert rejected["exit_code"] == 126
         assert "Newlines" in rejected["stderr"]
-
-    def test_pipes_rejected_by_default(self, test_repo):
-        """Prevent allowlist bypass via pipes when shell operators are disallowed."""
-        sandbox = SandboxRunner(
-            repo_root=test_repo,
-            image="unused",
-            stub=True,
-            allowed_commands=[r"^pytest(?:\s+.*)?$"],
-            enforce_allowlist=True,
-            allow_shell_operators=False,
-        )
-
-        rejected = sandbox.run("pytest -q | cat")
-        assert rejected["exit_code"] == 126
-        assert "Shell operator not allowed" in rejected["stderr"]
 
     def test_fail_closed_when_allowlist_empty(self, test_repo):
         """If allowlist enforcement is enabled with an empty allowlist, reject all."""
@@ -231,11 +212,11 @@ class TestSandboxRunner:
             repo_root=test_repo,
             image="unused",
             stub=True,
-            allowed_commands=[],
+            allowed_argv=[],
             enforce_allowlist=True,
         )
 
-        rejected = sandbox.run("echo ok")
+        rejected = sandbox.run(["python", "-c", "print('ok')"])
         assert rejected["exit_code"] == 126
         assert "allowlist is empty" in rejected["stderr"].lower()
 
@@ -251,7 +232,7 @@ class TestSandboxRunner:
             network="none",
         )
 
-        result = sandbox.run("echo 'Hello from Docker'")
+        result = sandbox.run(["python", "-c", "print('Hello from Docker')"])
 
         assert result["exit_code"] == 0
         assert "Hello from Docker" in result["stdout"]
@@ -268,11 +249,15 @@ class TestSandboxRunner:
             network="none",
         )
 
-        # This should fail because network is disabled
-        result = sandbox.run("ping -c 1 google.com || echo 'Network blocked'")
-
-        # Either ping fails or we see our fallback message
-        assert result["exit_code"] != 0 or "Network blocked" in result["stdout"]
+        # This should fail because network is disabled (best-effort; environment-dependent).
+        result = sandbox.run(
+            [
+                "python",
+                "-c",
+                "import socket; s=socket.socket(); s.settimeout(1); s.connect(('1.1.1.1', 53))",
+            ]
+        )
+        assert result["exit_code"] != 0
 
     @pytest.mark.skipif(
         os.getenv("SKIP_DOCKER_TESTS") == "1",
@@ -286,7 +271,7 @@ class TestSandboxRunner:
             network="none",
         )
 
-        result = sandbox.run("pwd")
+        result = sandbox.run(["pwd"])
 
         assert result["exit_code"] == 0
         assert "/repo" in result["stdout"]
@@ -303,7 +288,7 @@ class TestSandboxRunner:
             network="none",
         )
 
-        result = sandbox.run("ls test.py")
+        result = sandbox.run(["ls", "test.py"])
 
         assert result["exit_code"] == 0
         assert "test.py" in result["stdout"]
@@ -320,7 +305,7 @@ class TestSandboxRunner:
             network="none",
         )
 
-        result = sandbox.run("python test.py")
+        result = sandbox.run(["python", "test.py"])
 
         assert result["exit_code"] == 0
         assert "Hello from test repo" in result["stdout"]
@@ -337,10 +322,10 @@ class TestSandboxResultStructure:
             stub=True,
         )
 
-        result = sandbox.run("echo 'test'")
+        result = sandbox.run(["python", "-c", "print('test')"])
 
         # Check all expected fields are present
-        assert "cmd" in result
+        assert "argv" in result
         assert "exit_code" in result
         assert "stdout" in result
         assert "stderr" in result
@@ -354,9 +339,9 @@ class TestSandboxResultStructure:
             stub=True,
         )
 
-        result = sandbox.run("echo 'test'")
+        result = sandbox.run(["python", "-c", "print('test')"])
 
-        assert isinstance(result["cmd"], str)
+        assert isinstance(result["argv"], list)
         assert isinstance(result["exit_code"], int)
         assert isinstance(result["stdout"], str)
         assert isinstance(result["stderr"], str)
@@ -370,7 +355,9 @@ class TestSandboxResultStructure:
             stub=True,
         )
 
-        result = sandbox.run("echo 'error message' >&2")
+        result = sandbox.run(
+            ["python", "-c", "import sys; sys.stderr.write('error message\\n')"]
+        )
 
         assert result["exit_code"] == 0
         assert "error message" in result["stderr"]
@@ -383,7 +370,7 @@ class TestSandboxResultStructure:
             stub=True,
         )
 
-        result = sandbox.run("true")
+        result = sandbox.run(["python", "-c", "import sys"])
 
         assert result["exit_code"] == 0
         assert result["stdout"] == ""

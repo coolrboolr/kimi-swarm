@@ -1,13 +1,12 @@
 """Unit tests for git_ops.py - atomic patch application."""
 
-import pytest
-from pathlib import Path
 import subprocess
+
+import pytest
 
 from ambient.salvaged.git_ops import (
     git_apply_patch_atomic,
     git_reset_hard_clean,
-    PatchApplyError,
 )
 
 

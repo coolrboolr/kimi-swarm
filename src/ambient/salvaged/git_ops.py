@@ -240,7 +240,7 @@ def git_apply_patch_atomic(root: Path, unified_diff: str) -> dict[str, Any]:
         return written
 
     unified_diff = clean_patch(unified_diff)
-    debug_path = os.getenv("SWARMGUARD_PATCH_DEBUG_PATH")
+    debug_path = os.getenv("AMBIENT_PATCH_DEBUG_PATH") or os.getenv("SWARMGUARD_PATCH_DEBUG_PATH")
     if debug_path:
         try:
             Path(debug_path).write_text(unified_diff, encoding="utf-8")
@@ -353,7 +353,7 @@ def git_apply_patch_atomic(root: Path, unified_diff: str) -> dict[str, Any]:
             raise PatchApplyError(str(err))
 
     try:
-        if os.getenv("SWARMGUARD_PATCH_PREFER_FALLBACK") == "1":
+        if os.getenv("AMBIENT_PATCH_PREFER_FALLBACK") == "1" or os.getenv("SWARMGUARD_PATCH_PREFER_FALLBACK") == "1":
             try:
                 paths = apply_unified_diff_fallback(unified_diff)
                 if paths:

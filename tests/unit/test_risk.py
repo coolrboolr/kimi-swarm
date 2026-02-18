@@ -1,18 +1,18 @@
 """Unit tests for risk assessment."""
 
-import pytest
-from pathlib import Path
 
+import pytest
+
+from ambient.config import RiskPolicyConfig
 from ambient.risk import (
+    _check_sensitive_files,
     assess_risk,
-    requires_approval,
-    sort_by_risk_priority,
     filter_by_policy,
     generate_risk_report,
-    _check_sensitive_files,
+    requires_approval,
+    sort_by_risk_priority,
 )
 from ambient.types import Proposal
-from ambient.config import RiskPolicyConfig
 
 
 class TestAssessRisk:

@@ -12,9 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .types import Proposal
 from .config import RiskPolicyConfig
-
+from .types import Proposal
 
 # Sensitive file patterns that always require approval
 SENSITIVE_FILE_PATTERNS = [
@@ -114,7 +113,7 @@ def requires_approval(
         True if approval required
     """
     assessment = assess_risk(proposal, policy, repo_path)
-    return assessment["requires_approval"]
+    return bool(assessment.get("requires_approval", False))
 
 
 def _check_sensitive_files(files: list[str]) -> list[str]:

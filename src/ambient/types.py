@@ -20,7 +20,7 @@ class Proposal:
     estimated_loc_change: int
     tags: list[str] = field(default_factory=list)  # ["security", "refactor", "style", etc.]
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate proposal fields."""
         valid_risk_levels = {"low", "medium", "high", "critical"}
         if self.risk_level not in valid_risk_levels:
