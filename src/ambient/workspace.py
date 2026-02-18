@@ -356,6 +356,24 @@ class Workspace:
 
         return await loop.run_in_executor(None, _get_diff)
 
+    async def get_staged_diff(self) -> str:
+        """Get staged diff from the current workspace."""
+        loop = asyncio.get_event_loop()
+
+        def _get_diff() -> str:
+            import subprocess
+
+            result = subprocess.run(
+                ["git", "diff", "--cached"],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return result.stdout if result.returncode == 0 else ""
+
+        return await loop.run_in_executor(None, _get_diff)
+
     def register_verification(
         self, name: str, argv: list[str] | str, env: dict[str, str] | None = None
     ) -> None:

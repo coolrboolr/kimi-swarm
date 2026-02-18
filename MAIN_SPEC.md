@@ -1,7 +1,7 @@
 # Kimi K2.5 Ambient Swarm — Production Specification
 
 **Version:** 2.0
-**Goal:** Continuous, autonomous code quality maintenance system that monitors repositories for security issues, refactoring opportunities, and best practice violations, then automatically proposes and applies fixes.
+**Goal:** Continuous, autonomous code quality maintenance system that monitors repositories for security issues, refactoring opportunities, and best practice violations, then proposes reviewable fixes with safe, human-controlled integration.
 
 ---
 
@@ -39,6 +39,19 @@ Unlike batch CI/CD systems that run on commits, **ambient swarm** is a **persist
 3. **Continuous improvement**: Small, frequent fixes beat large refactoring PRs
 4. **Human-in-loop by default**: Propose freely, apply conservatively
 5. **Deterministic safety**: Single-writer, atomic patches, sandboxed execution
+
+### Focused Direction (Current)
+
+The active implementation direction for this phase is:
+
+- **Python-first** execution and verification while the ambient review loop stabilizes
+- **Both file-change and periodic triggers** enabled for continuous ambient operation
+- **Impact-radius analysis** so proposals can include related files beyond direct edits
+- **Dedicated review worktrees** per proposal (do not mutate the main working tree)
+- **Parallel proposal diffs** as patch artifacts so humans decide what to commit
+- **Manual commit-by-default** (`commit_on_success: false`)
+- **Advanced local cross-pollination** (multi-round refine, dedupe, conflict selection)
+- **Coverage-oriented best practices** documented and enforced through verification
 
 ### Core Insight from Current Implementation
 
@@ -88,11 +101,11 @@ The existing `swarmguard` system has **exceptional safety primitives** (atomic p
             ↓
 5. GATE:    Risk assessment → Human approval if needed
             ↓
-6. APPLY:   Atomic patch application (serial, deterministic)
+6. APPLY:   Generate proposal patches in dedicated review worktrees (parallel, isolated)
             ↓
-7. VERIFY:  Run checks in sandbox → Rollback if failed
+7. VERIFY:  Run sandbox checks per proposal worktree
             ↓
-8. LEARN:   Log outcome → Update agent scoring
+8. REVIEW:  Human reviews, commits selected proposal branches/patches
             ↓
 9. LOOP:    Return to DETECT
 ```
