@@ -46,15 +46,22 @@ def build_repo_pack(
             if "important_files" in pack and isinstance(pack["important_files"], dict):
                 pack["important_files"][f] = _read_cap(fp)
 
-    # Include all Python source files (up to 50 files, 200KB each)
-    # This allows agents to analyze actual code for issues
-    python_files = []
+    # Include Python source files, prioritizing hot_paths for impact-aware context.
+    python_files: list[str] = []
+    seen_python: set[str] = set()
+
+    for file_path in (hot_paths or []):
+        if file_path.endswith((".py", ".pyi")) and file_path not in seen_python:
+            python_files.append(file_path)
+            seen_python.add(file_path)
+
     if tree and "files" in tree:
         for file_path in tree["files"]:
-            if file_path.endswith((".py", ".pyi")):
+            if file_path.endswith((".py", ".pyi")) and file_path not in seen_python:
                 python_files.append(file_path)
+                seen_python.add(file_path)
 
-    # Limit to first 50 Python files to avoid context overflow
+    # Cap included source files to avoid context overflow.
     for file_path in python_files[:50]:
         fp = root / file_path
         if fp.exists() and fp.is_file():

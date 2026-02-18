@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ambient.salvaged.repo_pack import build_repo_pack, _read_cap, IMPORTANT_FILES
+from ambient.salvaged.repo_pack import IMPORTANT_FILES, _read_cap, build_repo_pack
 
 
 class TestReadCap:
@@ -207,6 +207,32 @@ class TestBuildRepoPack:
             # Should only include first 50 Python files
             python_in_pack = [k for k in pack["important_files"].keys() if k.endswith(".py")]
             assert len(python_in_pack) <= 50
+
+    def test_pack_prioritizes_hot_paths(self):
+        """Test hot paths are included ahead of generic Python file ordering."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            python_files = []
+            for i in range(60):
+                filename = f"pkg/file_{i}.py"
+                path = root / filename
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"# file {i}")
+                python_files.append(filename)
+
+            hot = "pkg/file_59.py"
+            pack_json = build_repo_pack(
+                root,
+                {"goal": "Test"},
+                {"files": python_files, "total_files": len(python_files)},
+                "",
+                "",
+                hot_paths=[hot],
+            )
+            pack = json.loads(pack_json)
+
+            assert hot in pack["important_files"]
 
     def test_pack_ignores_nonexistent_important_files(self):
         """Test pack doesn't fail on missing important files."""

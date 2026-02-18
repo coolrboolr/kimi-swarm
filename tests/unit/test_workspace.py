@@ -1,12 +1,11 @@
 """Unit tests for workspace.py - async workspace operations."""
 
-import pytest
-import asyncio
-from pathlib import Path
 import subprocess
 
+import pytest
+
+from ambient.types import AmbientEvent, Proposal
 from ambient.workspace import Workspace
-from ambient.types import Proposal, AmbientEvent
 
 
 @pytest.fixture
@@ -143,13 +142,19 @@ class TestWorkspaceVerification:
 
     async def test_stub_verification(self, git_repo, monkeypatch):
         """Test verification in stub mode."""
-        monkeypatch.setenv("SWARMGUARD_SANDBOX_STUB", "1")
+        monkeypatch.setenv("AMBIENT_SANDBOX_STUB", "1")
 
         # Create a dummy test that passes
         (git_repo / "test_dummy.py").write_text("def test_pass():\n    assert True\n")
 
         workspace = Workspace(git_repo, sandbox_image="unused")
-        workspace._verification_checks = [("pytest", "pytest -q")]
+        workspace._verification_checks = [
+            (
+                "pytest",
+                ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--basetemp=/tmp/pytest"],
+                {},
+            )
+        ]
 
         result = await workspace.verify_changes()
 
@@ -179,6 +184,7 @@ class TestWorkspaceBuildContext:
         assert isinstance(context.tree, dict)
         assert "files" in context.tree
         assert len(context.tree["files"]) > 0
+        assert "test.py" in context.hot_paths
 
     async def test_build_context_ci_failure(self, git_repo):
         """Test building context for CI failure event."""
@@ -233,6 +239,6 @@ class TestWorkspaceCustomVerification:
         """Test registering a custom verification check."""
         workspace = Workspace(git_repo, sandbox_image="unused")
 
-        workspace.register_verification("custom-lint", "echo 'Custom check'")
+        workspace.register_verification("custom-lint", ["python", "-c", "print('Custom check')"])
 
-        assert any(name == "custom-lint" for name, _ in workspace._verification_checks)
+        assert any(name == "custom-lint" for name, _, _ in workspace._verification_checks)
