@@ -7,13 +7,14 @@ from pathlib import Path
 import pytest
 
 from ambient.config import (
+    AgentsConfig,
+    AmbientConfig,
     KimiConfig,
     MonitoringConfig,
-    AgentsConfig,
+    ReviewWorktreeConfig,
     RiskPolicyConfig,
     SandboxConfig,
     TelemetryConfig,
-    AmbientConfig,
     load_config,
 )
 
@@ -166,9 +167,9 @@ class TestSandboxConfig:
     def test_allowed_commands(self):
         """Test allowed commands configuration."""
         config = SandboxConfig()
-        # Check that default allowed commands exist
-        assert any("pytest" in cmd for cmd in config.allowed_commands)
-        assert any("ruff" in cmd for cmd in config.allowed_commands)
+        # Check that default allowed argv prefixes exist
+        assert any(p and p[0] == "pytest" for p in config.allowed_argv)
+        assert any(p and p[0] == "ruff" for p in config.allowed_argv)
 
 
 class TestTelemetryConfig:
@@ -207,7 +208,19 @@ class TestAmbientConfig:
         assert isinstance(config.agents, AgentsConfig)
         assert isinstance(config.risk_policy, RiskPolicyConfig)
         assert isinstance(config.sandbox, SandboxConfig)
+        assert isinstance(config.review_worktree, ReviewWorktreeConfig)
         assert isinstance(config.telemetry, TelemetryConfig)
+
+    def test_default_git_commit_disabled(self):
+        """Ambient review mode defaults to manual commit flow."""
+        config = AmbientConfig()
+        assert config.git.commit_on_success is False
+
+    def test_default_review_worktree_enabled(self):
+        """Review worktrees are enabled by default for proposal curation."""
+        config = AmbientConfig()
+        assert config.review_worktree.enabled is True
+        assert config.review_worktree.max_parallel >= 1
 
     def test_load_from_dict(self):
         """Test loading configuration from dictionary."""

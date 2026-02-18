@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -137,24 +138,54 @@ class SandboxConfig(BaseModel):
     require_docker: bool = True
     stub_mode: bool = False
     enforce_allowlist: bool = True
-    allow_shell_operators: bool = False
-    allowed_commands: list[str] = Field(
+    # Prefer read-only repo mounts for verification.
+    repo_mount_mode: str = "ro"
+
+    # New allowlist: a list of argv prefixes. If argv begins with an entry, it is allowed
+    # (extra args are permitted).
+    allowed_argv: list[list[str]] = Field(
         default_factory=lambda: [
-            r"^pytest(?:\s+.*)?$",
-            r"^python\s+-m\s+pytest(?:\s+.*)?$",
-            r"^ruff\s+(check|format)(?:\s+.*)?$",
-            r"^mypy(?:\s+.*)?$",
-            r"^flake8(?:\s+.*)?$",
-            r"^cargo\s+(test|check|clippy)(?:\s+.*)?$",
-            r"^npm\s+test(?:\s+.*)?$",
-            r"^make\s+(test|lint|check)(?:\s+.*)?$",
-            r"^git\s+(status|diff|log|show)(?:\s+.*)?$",
+            ["pytest"],
+            ["python", "-m", "pytest"],
+            ["ruff", "check"],
+            ["ruff", "format"],
+            ["mypy"],
+            ["flake8"],
+            ["cargo", "test"],
+            ["cargo", "check"],
+            ["cargo", "clippy"],
+            ["npm", "test"],
+            ["make", "test"],
+            ["make", "lint"],
+            ["make", "check"],
+            ["git", "status"],
+            ["git", "diff"],
+            ["git", "log"],
+            ["git", "show"],
+            ["git", "rev-parse"],
         ]
     )
 
-    def is_command_allowed(self, command: str) -> bool:
-        """Check if command matches any allowed pattern."""
-        return any(re.fullmatch(pattern, command.strip()) for pattern in self.allowed_commands)
+    # Back-compat: legacy regex allowlist. This is validated against normalized argv
+    # (shlex.join(argv)). Prefer allowed_argv.
+    allowed_commands: list[str] = Field(default_factory=list)
+
+    @field_validator("repo_mount_mode")
+    @classmethod
+    def validate_repo_mount_mode(cls, v: str) -> str:
+        v = v.strip().lower()
+        if v not in {"ro", "rw"}:
+            raise ValueError("repo_mount_mode must be 'ro' or 'rw'")
+        return v
+
+    def is_argv_allowed(self, argv: list[str]) -> bool:
+        """Check if argv begins with any allowed prefix, or matches legacy regex patterns."""
+        if any(argv[: len(p)] == p for p in self.allowed_argv if p):
+            return True
+        if self.allowed_commands:
+            s = shlex.join(argv)
+            return any(re.fullmatch(pattern, s.strip()) for pattern in self.allowed_commands)
+        return False
 
 
 class VerificationConfig(BaseModel):
@@ -166,11 +197,21 @@ class VerificationConfig(BaseModel):
 class GitConfig(BaseModel):
     """Git recording behavior after successful apply + verify."""
 
-    commit_on_success: bool = True
+    commit_on_success: bool = False
     require_clean_before_apply: bool = True
     commit_message_template: str = "ambient: {title} ({agent})"
     commit_author_name: str = "Ambient Swarm"
     commit_author_email: str = "ambient@bot.local"
+
+
+class ReviewWorktreeConfig(BaseModel):
+    """Parallel review-worktree configuration for manual proposal curation."""
+
+    enabled: bool = True
+    base_dir: str = ".ambient/reviews"
+    branch_prefix: str = "ambient/review"
+    max_parallel: int = 4
+    keep_worktrees: bool = True
 
 
 class WebhookApprovalConfig(BaseModel):
@@ -196,6 +237,19 @@ class TelemetryConfig(BaseModel):
     retention_days: int = 30
 
 
+class ControlPlaneConfig(BaseModel):
+    """Operational safety controls and kill-switches."""
+
+    paused: bool = False
+    max_proposals_per_hour: int = 0  # 0 means unlimited
+    failure_rate_window: int = 20
+    disable_auto_apply_on_failure_rate: bool = True
+    failure_rate_threshold: float = 0.5
+    min_failures_before_disable: int = 3
+    backoff_base_seconds: int = 30
+    backoff_max_seconds: int = 600
+
+
 class LearningConfig(BaseModel):
     """Learning and adaptation configuration (future feature)."""
 
@@ -214,8 +268,10 @@ class AmbientConfig(BaseModel):
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     git: GitConfig = Field(default_factory=GitConfig)
+    review_worktree: ReviewWorktreeConfig = Field(default_factory=ReviewWorktreeConfig)
     approval: ApprovalConfig = Field(default_factory=ApprovalConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    control_plane: ControlPlaneConfig = Field(default_factory=ControlPlaneConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
 
     @classmethod
@@ -259,8 +315,6 @@ class AmbientConfig(BaseModel):
             self.sandbox.network_mode = network
         if os.getenv("AMBIENT_SANDBOX_STUB") == "1":
             self.sandbox.stub_mode = True
-        if os.getenv("AMBIENT_SANDBOX_ALLOW_SHELL_OPERATORS") == "1":
-            self.sandbox.allow_shell_operators = True
         if os.getenv("AMBIENT_SANDBOX_DISABLE_ALLOWLIST") == "1":
             self.sandbox.enforce_allowlist = False
 
@@ -280,6 +334,14 @@ class AmbientConfig(BaseModel):
         if email := os.getenv("AMBIENT_GIT_AUTHOR_EMAIL"):
             self.git.commit_author_email = email
 
+        # Review worktree overrides
+        if os.getenv("AMBIENT_REVIEW_WORKTREE_DISABLED") == "1":
+            self.review_worktree.enabled = False
+        if v := os.getenv("AMBIENT_REVIEW_MAX_PARALLEL"):
+            self.review_worktree.max_parallel = int(v)
+        if v := os.getenv("AMBIENT_REVIEW_BASE_DIR"):
+            self.review_worktree.base_dir = v
+
         # Approval overrides
         if webhook_url := os.getenv("AMBIENT_APPROVAL_WEBHOOK_URL"):
             self.approval.webhook.url = webhook_url
@@ -289,6 +351,14 @@ class AmbientConfig(BaseModel):
         # Telemetry overrides
         if log_path := os.getenv("AMBIENT_TELEMETRY_PATH"):
             self.telemetry.log_path = log_path
+
+        # Control-plane overrides
+        if os.getenv("AMBIENT_PAUSED") == "1":
+            self.control_plane.paused = True
+        if v := os.getenv("AMBIENT_MAX_PROPOSALS_PER_HOUR"):
+            self.control_plane.max_proposals_per_hour = int(v)
+        if v := os.getenv("AMBIENT_FAILURE_RATE_THRESHOLD"):
+            self.control_plane.failure_rate_threshold = float(v)
 
 
 def load_config(repo_path: Path | str) -> AmbientConfig:

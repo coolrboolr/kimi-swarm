@@ -4,34 +4,37 @@ Commands:
 - ambient watch <repo_path>: Start continuous monitoring
 - ambient run-once <repo_path>: Run single cycle
 - ambient verify <repo_path>: Verify repository state
-- ambient debug context <repo_path>: Show repository context
+- ambient doctor <repo_path>: Preflight checks for sandbox + dependencies
+- ambient debug-context <repo_path>: Show repository context
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections import deque
 import json
+import shlex
 import sys
+from collections import deque
 from pathlib import Path
 
 import click
 
-from .config import load_config, AmbientConfig
-from .coordinator import AmbientCoordinator
-from .workspace import Workspace
-from .types import AmbientEvent
 from .approval import (
-    ApprovalHandler,
     AlwaysApproveHandler,
     AlwaysRejectHandler,
+    ApprovalHandler,
     WebhookApprovalHandler,
 )
+from .config import AmbientConfig, load_config
+from .coordinator import AmbientCoordinator
+from .status import StatusWindow, compute_status
+from .types import AmbientEvent
+from .workspace import Workspace
 
 
 @click.group()
 @click.version_option(version="2.0.0", prog_name="ambient")
-def cli():
+def cli() -> None:
     """Ambient Swarm - Continuous code quality maintenance system."""
     pass
 
@@ -50,6 +53,16 @@ def cli():
     help="Don't apply any changes (dry run mode)",
 )
 @click.option(
+    "--foreground",
+    is_flag=True,
+    help="Run in the foreground (no-op; suitable for supervision).",
+)
+@click.option(
+    "--skip-doctor",
+    is_flag=True,
+    help="Skip startup preflight checks (not recommended).",
+)
+@click.option(
     "--approval-mode",
     type=click.Choice(["interactive", "webhook"]),
     default="interactive",
@@ -61,8 +74,10 @@ def watch(
     config: str | None,
     auto_approve: bool,
     dry_run: bool,
+    foreground: bool,
+    skip_doctor: bool,
     approval_mode: str,
-):
+) -> None:
     """Start continuous monitoring of repository.
 
     Watches for file changes and continuously proposes improvements.
@@ -86,6 +101,7 @@ def watch(
     ambient_config.apply_env_overrides()
 
     # Create approval handler
+    approval_handler: ApprovalHandler
     if dry_run:
         click.echo("Mode: DRY RUN (no changes will be applied)")
         approval_handler = AlwaysRejectHandler(ambient_config.risk_policy)
@@ -118,6 +134,47 @@ def watch(
     click.echo("Press Ctrl+C to stop")
     click.echo("=" * 60)
     click.echo()
+
+    if not skip_doctor:
+        # Fail fast under supervision if the sandbox cannot start.
+        w = Workspace(
+            repo_path_obj,
+            ambient_config.sandbox.image,
+            sandbox_network=ambient_config.sandbox.network_mode,
+            sandbox_memory=ambient_config.sandbox.resources.memory,
+            sandbox_cpus=ambient_config.sandbox.resources.cpus,
+            sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+            sandbox_allowed_argv=ambient_config.sandbox.allowed_argv,
+            sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+            sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+            sandbox_require_docker=ambient_config.sandbox.require_docker,
+            sandbox_stub=ambient_config.sandbox.stub_mode,
+            sandbox_repo_mount_mode=ambient_config.sandbox.repo_mount_mode,
+            verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+        )
+        probes: list[list[str]] = [["python", "--version"], ["git", "--version"]]
+        for _, argv, _ in getattr(w, "_verification_checks", []):
+            if not argv:
+                continue
+            if argv[:3] == ["python", "-m", "pytest"] or argv[0] == "pytest":
+                probes.append(["python", "-m", "pytest", "--version"])
+            if argv[:2] == ["ruff", "check"] or argv[:2] == ["ruff", "format"] or argv[0] == "ruff":
+                probes.append(["ruff", "--version"])
+            if argv[0] == "mypy":
+                probes.append(["mypy", "--version"])
+
+        seen: set[str] = set()
+        unique: list[list[str]] = []
+        for p in probes:
+            key = "\x00".join(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(p)
+
+        res = w.sandbox.doctor(unique)
+        if not res.get("ok"):
+            raise click.ClickException(f"Doctor failed: {res.get('error')}")
 
     # Create and start coordinator
     coordinator = AmbientCoordinator(repo_path_obj, ambient_config, approval_handler)
@@ -163,7 +220,7 @@ def run_once(
     dry_run: bool,
     approval_mode: str,
     output: str | None,
-):
+) -> None:
     """Run a single analysis cycle.
 
     Analyzes repository once and applies proposals.
@@ -186,6 +243,7 @@ def run_once(
     ambient_config.apply_env_overrides()
 
     # Create approval handler
+    approval_handler: ApprovalHandler
     if dry_run:
         approval_handler = AlwaysRejectHandler(ambient_config.risk_policy)
         click.echo("Mode: DRY RUN")
@@ -238,7 +296,12 @@ def run_once(
         click.echo("Applied changes:")
         for item in result["applied"]:
             proposal = item["proposal"]
-            click.echo(f"  ✓ {proposal.title} ({proposal.agent})")
+            line = f"  ✓ {proposal.title} ({proposal.agent})"
+            if item.get("review_branch"):
+                line += f" [branch: {item['review_branch']}]"
+            click.echo(line)
+            if item.get("patch_path"):
+                click.echo(f"    patch: {item['patch_path']}")
 
     if result.get("failed"):
         click.echo()
@@ -267,7 +330,7 @@ def run_once(
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
 @click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
-def verify(repo_path: str, config: str | None):
+def verify(repo_path: str, config: str | None) -> None:
     """Verify repository state.
 
     Runs all verification checks (tests, linters, etc.) without proposing changes.
@@ -296,11 +359,12 @@ def verify(repo_path: str, config: str | None):
         sandbox_memory=ambient_config.sandbox.resources.memory,
         sandbox_cpus=ambient_config.sandbox.resources.cpus,
         sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_argv=ambient_config.sandbox.allowed_argv,
         sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
         sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
-        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
         sandbox_require_docker=ambient_config.sandbox.require_docker,
         sandbox_stub=ambient_config.sandbox.stub_mode,
+        sandbox_repo_mount_mode=ambient_config.sandbox.repo_mount_mode,
         verification_timeout_seconds=ambient_config.verification.timeout_seconds,
     )
 
@@ -337,6 +401,88 @@ def verify(repo_path: str, config: str | None):
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
 @click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
+def doctor(repo_path: str, config: str | None) -> None:
+    """Run startup preflight checks (docker, image, and tool availability)."""
+    repo_path_obj = Path(repo_path).resolve()
+
+    if config:
+        ambient_config = AmbientConfig.load_from_file(config)
+    else:
+        ambient_config = load_config(repo_path_obj)
+    ambient_config.apply_env_overrides()
+
+    workspace = Workspace(
+        repo_path_obj,
+        ambient_config.sandbox.image,
+        sandbox_network=ambient_config.sandbox.network_mode,
+        sandbox_memory=ambient_config.sandbox.resources.memory,
+        sandbox_cpus=ambient_config.sandbox.resources.cpus,
+        sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_argv=ambient_config.sandbox.allowed_argv,
+        sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
+        sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
+        sandbox_require_docker=ambient_config.sandbox.require_docker,
+        sandbox_stub=ambient_config.sandbox.stub_mode,
+        sandbox_repo_mount_mode=ambient_config.sandbox.repo_mount_mode,
+        verification_timeout_seconds=ambient_config.verification.timeout_seconds,
+    )
+
+    # Basic probes; keep them quick and deterministic.
+    probes: list[list[str]] = [["python", "--version"], ["git", "--version"]]
+
+    # Probe tools implied by verification checks.
+    for _, argv, _ in getattr(workspace, "_verification_checks", []):
+        if not argv:
+            continue
+        if argv[:3] == ["python", "-m", "pytest"] or argv[0] == "pytest":
+            probes.append(["python", "-m", "pytest", "--version"])
+        if argv[:2] == ["ruff", "check"] or argv[:2] == ["ruff", "format"] or argv[0] == "ruff":
+            probes.append(["ruff", "--version"])
+        if argv[0] == "mypy":
+            probes.append(["mypy", "--version"])
+
+    # De-dupe probes while preserving order.
+    seen: set[str] = set()
+    unique_probes: list[list[str]] = []
+    for p in probes:
+        key = "\x00".join(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_probes.append(p)
+
+    click.echo(f"ambient doctor: repo={repo_path_obj}")
+    click.echo(f"Sandbox image: {ambient_config.sandbox.image}")
+    click.echo(f"Repo mount mode: {ambient_config.sandbox.repo_mount_mode}")
+    click.echo()
+
+    res = workspace.sandbox.doctor(unique_probes)
+    if res.get("ok"):
+        click.echo("✓ Doctor checks passed")
+        sys.exit(0)
+
+    click.echo("✗ Doctor checks failed")
+    if err := res.get("error"):
+        click.echo(f"Error: {err}")
+    if res.get("image"):
+        click.echo(f"Image: {res.get('image')}")
+    if res.get("stderr"):
+        click.echo(f"Details: {res.get('stderr')}")
+    if res.get("checks"):
+        click.echo()
+        for c in res["checks"]:
+            status = "✓" if c.get("ok") else "✗"
+            click.echo(f"  {status} {shlex.join(c.get('argv', []))}")
+            if not c.get("ok"):
+                head = (c.get("stderr_head") or c.get("stdout_head") or "").strip()
+                if head:
+                    click.echo(f"    {head[:200]}")
+    sys.exit(1)
+
+
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
 @click.option(
     "--format",
     "-f",
@@ -344,14 +490,14 @@ def verify(repo_path: str, config: str | None):
     default="text",
     help="Output format",
 )
-def debug_context(repo_path: str, config: str | None, format: str):
+def debug_context(repo_path: str, config: str | None, format: str) -> None:
     """Show repository context that agents see.
 
     Displays the full context (file tree, configs, etc.) that is sent to agents.
 
     Example:
-        ambient debug context /path/to/repo
-        ambient debug context /path/to/repo -f json
+        ambient debug-context /path/to/repo
+        ambient debug-context /path/to/repo -f json
     """
     repo_path_obj = Path(repo_path).resolve()
 
@@ -371,11 +517,12 @@ def debug_context(repo_path: str, config: str | None, format: str):
         sandbox_memory=ambient_config.sandbox.resources.memory,
         sandbox_cpus=ambient_config.sandbox.resources.cpus,
         sandbox_pids_limit=ambient_config.sandbox.resources.pids_limit,
+        sandbox_allowed_argv=ambient_config.sandbox.allowed_argv,
         sandbox_allowed_commands=ambient_config.sandbox.allowed_commands,
         sandbox_enforce_allowlist=ambient_config.sandbox.enforce_allowlist,
-        sandbox_allow_shell_operators=ambient_config.sandbox.allow_shell_operators,
         sandbox_require_docker=ambient_config.sandbox.require_docker,
         sandbox_stub=ambient_config.sandbox.stub_mode,
+        sandbox_repo_mount_mode=ambient_config.sandbox.repo_mount_mode,
         verification_timeout_seconds=ambient_config.verification.timeout_seconds,
     )
 
@@ -433,7 +580,7 @@ def debug_context(repo_path: str, config: str | None, format: str):
 
 @cli.command()
 @click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
-def init(repo_path: str):
+def init(repo_path: str) -> None:
     """Initialize ambient configuration in repository.
 
     Creates a default .ambient.yml configuration file.
@@ -497,12 +644,27 @@ sandbox:
     memory: 2g
     cpus: "2.0"
     pids_limit: 100
-  allowed_commands:
-    - ^pytest
-    - ^python\\s+-m\\s+pytest
-    - ^ruff\\s+(check|format)
-    - ^mypy
-    - ^make\\s+(test|lint|check)
+  repo_mount_mode: ro
+  allowed_argv:
+    - ["pytest"]
+    - ["python", "-m", "pytest"]
+    - ["ruff", "check"]
+    - ["ruff", "format"]
+    - ["mypy"]
+    - ["make", "test"]
+    - ["make", "lint"]
+    - ["make", "check"]
+
+review_worktree:
+  enabled: true
+  base_dir: .ambient/reviews
+  branch_prefix: ambient/review
+  max_parallel: 4
+  keep_worktrees: true
+
+git:
+  commit_on_success: false
+  require_clean_before_apply: true
 
 telemetry:
   enabled: true
@@ -520,8 +682,70 @@ telemetry:
     click.echo("3. Start monitoring: ambient watch .")
 
 
+@cli.command()
+@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "-c", type=click.Path(exists=True), help="Config file path")
+@click.option(
+    "--format",
+    "-f",
+    "format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+)
+@click.option(
+    "--window-minutes",
+    type=int,
+    default=60,
+    show_default=True,
+    help="Metrics window (best-effort from telemetry).",
+)
+@click.option(
+    "--health",
+    is_flag=True,
+    help="Exit 0 if last cycle is healthy; 1 otherwise.",
+)
+def status(repo_path: str, config: str | None, format: str, window_minutes: int, health: bool) -> None:
+    """Show operational status/metrics from telemetry."""
+    repo_path_obj = Path(repo_path).resolve()
+
+    if config:
+        ambient_config = AmbientConfig.load_from_file(config)
+    else:
+        ambient_config = load_config(repo_path_obj)
+    ambient_config.apply_env_overrides()
+
+    telemetry_path = repo_path_obj / ambient_config.telemetry.log_path
+    st = compute_status(telemetry_path, window=StatusWindow(seconds=max(60, window_minutes) * 60.0))
+
+    if health:
+        last = st.get("last_cycle") or {}
+        status_val = (last.get("data") or {}).get("status")
+        ok = status_val in {"success", "no_proposals"}
+        sys.exit(0 if ok else 1)
+
+    if format == "json":
+        click.echo(json.dumps(st, indent=2))
+        return
+
+    click.echo(f"Telemetry: {telemetry_path}")
+    click.echo(f"Window: {window_minutes} minutes")
+    click.echo(f"Proposals/hour: {st.get('proposals_per_hour'):.2f}")
+    click.echo(f"Apply success rate: {st.get('apply_success_rate')}")
+    click.echo(f"Verify success rate: {st.get('verify_success_rate')}")
+    click.echo(f"Queue depth p95: {st.get('queue_depth_p95')}")
+    click.echo(f"Queue depth max: {st.get('queue_depth_max')}")
+    click.echo(f"Cycle latency p50 (s): {st.get('cycle_latency_s_p50')}")
+    click.echo(f"Cycle latency p95 (s): {st.get('cycle_latency_s_p95')}")
+
+    last = st.get("last_cycle") or {}
+    if last:
+        click.echo()
+        click.echo(f"Last cycle: run_id={last.get('run_id')} status={(last.get('data') or {}).get('status')}")
+
+
 @cli.group()
-def telemetry():
+def telemetry() -> None:
     """Telemetry utilities."""
 
 
@@ -551,14 +775,14 @@ def telemetry_tail(repo_path: str, config: str | None, lines: int) -> None:
     if not telemetry_path.exists():
         raise click.ClickException(f"Telemetry file not found: {telemetry_path}")
 
-    with open(telemetry_path, "r", encoding="utf-8") as f:
+    with open(telemetry_path, encoding="utf-8") as f:
         tail = deque(f, maxlen=max(0, lines))
 
     for ln in tail:
         click.echo(ln, nl=False)
 
 
-def main():
+def main() -> None:
     """Entry point for CLI."""
     cli()
 
