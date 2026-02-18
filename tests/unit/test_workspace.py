@@ -232,6 +232,20 @@ class TestWorkspaceSafePaths:
 
 
 @pytest.mark.asyncio
+class TestWorkspaceGitHelpers:
+    """Test git helper methods."""
+
+    async def test_get_staged_diff(self, git_repo):
+        """Staged diff helper should return current staged patch."""
+        workspace = Workspace(git_repo, sandbox_image="unused")
+        (git_repo / "test.py").write_text("def hello():\n    print('Hi')\n")
+        subprocess.run(["git", "add", "test.py"], cwd=git_repo, check=True, capture_output=True)
+
+        diff = await workspace.get_staged_diff()
+        assert "+++ b/test.py" in diff
+
+
+@pytest.mark.asyncio
 class TestWorkspaceCustomVerification:
     """Test custom verification registration."""
 
