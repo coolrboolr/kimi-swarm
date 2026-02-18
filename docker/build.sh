@@ -19,7 +19,15 @@ echo ""
 
 # Parse arguments
 BUILD_TYPE="${1:-full}"
-TAG="${2:-latest}"
+if [ -n "${2:-}" ]; then
+    TAG="$2"
+else
+    if command -v python3 >/dev/null 2>&1 && [ -f "$PROJECT_ROOT/scripts/get_version.py" ]; then
+        TAG="$(python3 "$PROJECT_ROOT/scripts/get_version.py" 2>/dev/null || echo latest)"
+    else
+        TAG="latest"
+    fi
+fi
 
 if [ "$BUILD_TYPE" = "minimal" ]; then
     DOCKERFILE="$SCRIPT_DIR/Dockerfile.minimal"

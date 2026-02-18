@@ -74,6 +74,15 @@ The sandbox enforces multiple security layers:
 --network none  # No network access by default
 ```
 
+### Container Hardening
+Ambient runs containers with additional restrictions:
+
+- `--read-only`
+- `--cap-drop=ALL`
+- `--security-opt=no-new-privileges`
+- `--tmpfs /tmp` (writable scratch)
+- tight `--ulimit` limits
+
 ### Resource Limits
 ```bash
 --memory 2g           # 2GB memory limit
@@ -85,10 +94,15 @@ The sandbox enforces multiple security layers:
 The sandbox runs as user `ambient` (UID 1000), not root.
 
 ### Read-Only Mounts
-Repository is mounted read-write at `/repo`, but other paths are read-only.
+Repository is mounted **read-only** by default at `/repo` for verification. Ambient redirects tool caches to `/tmp` and disables pytest's cache provider to avoid repo writes. If you need repo writes for a specific workflow, set:
+
+```yaml
+sandbox:
+  repo_mount_mode: rw
+```
 
 ### Command Allowlist
-Only whitelisted commands can be executed (enforced by ambient).
+Only whitelisted commands can be executed (enforced by ambient). The allowlist is validated against the parsed argv (command + args), not raw shell strings.
 
 ## Customization
 

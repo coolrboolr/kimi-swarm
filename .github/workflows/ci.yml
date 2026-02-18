@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff
+        run: |
+          ruff check .
+
+      - name: Mypy
+        run: |
+          python -m mypy src
+
+      - name: Pytest
+        run: |
+          pytest
+
+      - name: Pytest (No Network)
+        run: |
+          pytest --disable-socket --allow-unix-socket
+
+      - name: Build Python Package
+        run: |
+          python -m build
+
+  sandbox-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Sandbox Image
+        run: |
+          docker build -t ambient-sandbox:${{ github.sha }} -f docker/Dockerfile .
+          docker run --rm ambient-sandbox:${{ github.sha }} python --version

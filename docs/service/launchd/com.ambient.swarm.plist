@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.ambient.swarm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/usr/local/bin/ambient</string>
+      <string>watch</string>
+      <string>/path/to/repo</string>
+      <string>--approval-mode</string>
+      <string>webhook</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+      <key>PYTHONUNBUFFERED</key>
+      <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/ambient-swarm.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/ambient-swarm.err.log</string>
+  </dict>
+</plist>
+
