@@ -36,6 +36,7 @@ from .agents import (
 )
 from .approval import AlwaysRejectHandler, ApprovalHandler
 from .config import AmbientConfig
+from .cross_pollination import advanced_cross_pollinate
 from .kimi_client import KimiClient
 from .risk import assess_risk, sort_by_risk_priority
 from .salvaged.git_ops import git_commit, git_has_staged_changes, git_is_clean
@@ -564,25 +565,43 @@ class AmbientCoordinator:
         if not self.agents:
             return proposals
 
-        # Run refinement in parallel
-        refined_lists: list[list[Proposal] | BaseException] = await asyncio.gather(
+        # Round 1: independent refinement by each specialist.
+        refined_results: list[list[Proposal] | BaseException] = await asyncio.gather(
             *[agent.refine(proposals, context) for agent in self.agents],
             return_exceptions=True,
         )
 
-        # Flatten
-        refined: list[Proposal] = []
-        for result in refined_lists:
-            if isinstance(result, list):
-                refined.extend(result)
+        refined_lists: list[list[Proposal]] = []
+        agent_errors = 0
+        for i, result in enumerate(refined_results):
+            if isinstance(result, BaseException):
+                agent_errors += 1
+                self.telemetry.log(
+                    run_id,
+                    "cross_pollination_agent_error",
+                    {
+                        "agent": self.agents[i].__class__.__name__,
+                        "error": redact_text(str(result), max_len=200),
+                    },
+                )
+                continue
+            refined_lists.append(result)
+
+        # Rounds 2-4: deterministic dedupe/conflict-resolution/ranking.
+        decision = advanced_cross_pollinate(proposals, refined_lists)
 
         self.telemetry.log(
             run_id,
             "cross_pollination",
-            {"original_count": len(proposals), "refined_count": len(refined)},
+            {
+                "original_count": len(proposals),
+                "refined_count": len(decision.proposals),
+                "agent_errors": agent_errors,
+                **decision.metadata,
+            },
         )
 
-        return refined if refined else proposals
+        return decision.proposals if decision.proposals else proposals
 
     async def _apply_proposals(
         self,

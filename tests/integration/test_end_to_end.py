@@ -1,14 +1,14 @@
 """Integration tests for end-to-end ambient system flow."""
 
-import pytest
 import subprocess
-from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
-from ambient.coordinator import AmbientCoordinator
-from ambient.config import AmbientConfig
-from ambient.types import AmbientEvent
+import pytest
+
 from ambient.approval import AlwaysApproveHandler, AlwaysRejectHandler
+from ambient.config import AmbientConfig
+from ambient.coordinator import AmbientCoordinator
+from ambient.types import AmbientEvent
 
 
 @pytest.fixture
@@ -54,6 +54,9 @@ def mock_config():
     config = AmbientConfig()
     # Keep integration tests hermetic: no persistent telemetry artifacts.
     config.telemetry.enabled = False
+    # These tests exercise direct-apply behavior; review-worktree mode is covered
+    # in test_full_pipeline.
+    config.review_worktree.enabled = False
     return config
 
 
@@ -111,7 +114,7 @@ class TestEndToEndFlow:
             content = (test_repo / "main.py").read_text()
             assert "Hello, World!" in content
 
-            # Verify the change was committed and worktree is clean
+            # Verify manual-review flow leaves staged changes for user commit.
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=test_repo,
@@ -119,12 +122,14 @@ class TestEndToEndFlow:
                 capture_output=True,
                 text=True,
             ).stdout.strip()
-            # Tooling artifacts may be untracked (e.g., telemetry, patch scratch),
-            # but there should be no tracked modifications after commit.
-            remaining = [
-                ln for ln in status.splitlines() if ln.strip() and not ln.startswith("?? .ambient/") and not ln.startswith("?? .swarmguard/")
+            tracked = [
+                ln
+                for ln in status.splitlines()
+                if ln.strip()
+                and not ln.startswith("?? .ambient/")
+                and not ln.startswith("?? .swarmguard/")
             ]
-            assert remaining == []
+            assert "M  main.py" in tracked
 
     async def test_approval_rejection(self, test_repo, mock_config):
         """Test that rejected proposals are not applied."""
@@ -218,7 +223,7 @@ class TestEndToEndFlow:
 
     async def test_verification_failure_rollback(self, test_repo, mock_config, monkeypatch):
         """Test that failed verification triggers rollback."""
-        monkeypatch.setenv("SWARMGUARD_SANDBOX_STUB", "1")
+        monkeypatch.setenv("AMBIENT_SANDBOX_STUB", "1")
 
         approval_handler = AlwaysApproveHandler(mock_config.risk_policy)
         coordinator = AmbientCoordinator(test_repo, mock_config, approval_handler)
@@ -248,8 +253,6 @@ class TestEndToEndFlow:
             }
 
             # Mock verification to fail
-            original_verify = coordinator.workspace.verify_changes
-
             async def mock_verify():
                 from ambient.types import VerificationResult
 
