@@ -2,12 +2,13 @@
 
 import tempfile
 from pathlib import Path
+
 import pytest
 
+from ambient.approval import AlwaysApproveHandler, AlwaysRejectHandler
+from ambient.config import AmbientConfig
 from ambient.coordinator import AmbientCoordinator
-from ambient.config import AmbientConfig, KimiConfig
 from ambient.types import AmbientEvent
-from ambient.approval import AlwaysRejectHandler, AlwaysApproveHandler
 
 
 @pytest.fixture
@@ -154,8 +155,8 @@ class TestWorkspaceIntegration:
     @pytest.mark.asyncio
     async def test_workspace_apply_and_rollback(self, temp_git_repo, mock_config):
         """Test workspace patch application and rollback."""
-        from ambient.workspace import Workspace
         from ambient.types import Proposal
+        from ambient.workspace import Workspace
 
         workspace = Workspace(temp_git_repo, mock_config.sandbox.image)
 
@@ -281,6 +282,68 @@ class TestApprovalIntegration:
         # If failed, should not be due to approval
         if result["failed"]:
             assert result["failed"][0]["reason"] != "approval_rejected"
+
+    @pytest.mark.asyncio
+    async def test_parallel_review_outputs_patch_paths(self, temp_git_repo):
+        """Review mode should emit branch/worktree/patch output per proposal."""
+        config = AmbientConfig()
+        config.agents.enabled = []
+        config.telemetry.enabled = False
+        config.review_worktree.enabled = True
+        config.review_worktree.max_parallel = 2
+
+        coordinator = AmbientCoordinator(
+            temp_git_repo,
+            config,
+            AlwaysApproveHandler(config.risk_policy),
+        )
+
+        from ambient.types import ApplyResult, Proposal, VerificationResult
+
+        class FakeWorkspace:
+            async def apply_patch(self, proposal: Proposal) -> ApplyResult:
+                return ApplyResult(ok=True, stat="1 file changed", stderr="")
+
+            async def verify_changes(self) -> VerificationResult:
+                return VerificationResult(ok=True, results=[], duration_s=0.01)
+
+            async def get_staged_diff(self) -> str:
+                return "--- a/main.py\\n+++ b/main.py\\n@@ -1 +1 @@\\n-old\\n+new\\n"
+
+        coordinator._workspace_for_path = lambda _path: FakeWorkspace()  # type: ignore[method-assign]
+
+        proposals = [
+            Proposal(
+                agent="TestAgent",
+                title="Proposal A",
+                description="desc",
+                diff="unused",
+                risk_level="low",
+                rationale="rationale",
+                files_touched=["main.py"],
+                estimated_loc_change=1,
+            ),
+            Proposal(
+                agent="TestAgent",
+                title="Proposal B",
+                description="desc",
+                diff="unused",
+                risk_level="low",
+                rationale="rationale",
+                files_touched=["main.py"],
+                estimated_loc_change=1,
+            ),
+        ]
+
+        result = await coordinator._apply_proposals(proposals, "review-run", dry_run=False)
+
+        assert len(result["applied"]) == 2
+        for item in result["applied"]:
+            assert item.get("review_branch")
+            assert item.get("review_worktree")
+            patch_path = item.get("patch_path")
+            assert patch_path
+            assert Path(patch_path).exists()
 
 
 class TestRiskIntegration:
